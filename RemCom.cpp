@@ -175,7 +175,8 @@ BOOL IsLaunchedFromAdmin()
 
 	SID_AND_ATTRIBUTES* const end = pTokenGroups->Groups + pTokenGroups->GroupCount;
 
-	for ( SID_AND_ATTRIBUTES* it = pTokenGroups->Groups; end != it; ++it )
+	SID_AND_ATTRIBUTES* it;
+	for ( it = pTokenGroups->Groups; end != it; ++it )
 		if ( EqualSid( it->Sid, pAdminSid ) )
 			break;
 
