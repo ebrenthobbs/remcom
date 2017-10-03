@@ -151,7 +151,6 @@
   <ItemGroup>
     <ClInclude Include="RemCom.h" />
     <ClInclude Include="resource.h" />
-    <ClInclude Include="resource1.h" />
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="ProcComs\Release\ProcComs.bin" />
