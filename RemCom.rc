@@ -52,7 +52,7 @@ END
 // REMCOMSVC
 //
 
-IDR_RemComSVC           REMCOMSVC DISCARDABLE   "RemComSvc/Release/RemComSvc.exe"
+IDR_RemComSVC           REMCOMSVC DISCARDABLE   "RemComSvc/Debug/RemComSvc.exe"
 
 #ifndef _MAC
 /////////////////////////////////////////////////////////////////////////////
@@ -105,7 +105,7 @@ END
 // PROCCOMS
 //
 
-IDR_ProcComs            PROCCOMS DISCARDABLE    "ProcComs\\Release\\ProcComs.bin"
+IDR_ProcComs            PROCCOMS DISCARDABLE    "ProcComs\\Debug\\ProcComs.exe"
 #endif    // English (U.S.) resources
 /////////////////////////////////////////////////////////////////////////////
 

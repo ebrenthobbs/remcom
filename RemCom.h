@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <process.h>
+#include <thread>
 //#include <iostream.h>
 #include <userenv.h>
 #include "ProcFunctions.h"
