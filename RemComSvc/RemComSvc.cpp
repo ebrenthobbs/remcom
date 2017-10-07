@@ -158,19 +158,19 @@ BOOL CreateNamedPipes( RemComMessage* pMsg, STARTUPINFO* psi )
    psi->hStdError = INVALID_HANDLE_VALUE;
 
    // StdOut pipe name
-   _stprintf( szStdOutPipe, _T("\\\\.\\pipe\\%s%s%d"), 
+   _stprintf_s( szStdOutPipe, _T("\\\\.\\pipe\\%s%s%d"), 
             RemComSTDOUT, 
             pMsg->szMachine,
             pMsg->dwProcessId );
 
    // StdIn pipe name
-   _stprintf( szStdInPipe, _T("\\\\.\\pipe\\%s%s%d"), 
+   _stprintf_s( szStdInPipe, _T("\\\\.\\pipe\\%s%s%d"), 
             RemComSTDIN, 
             pMsg->szMachine,
             pMsg->dwProcessId );
 
    // StdError pipe name
-   _stprintf( szStdErrPipe, _T("\\\\.\\pipe\\%s%s%d"), 
+   _stprintf_s( szStdErrPipe, _T("\\\\.\\pipe\\%s%s%d"), 
             RemComSTDERR, 
             pMsg->szMachine,
             pMsg->dwProcessId );
@@ -248,7 +248,7 @@ DWORD Execute( RemComMessage* pMsg, DWORD* pReturnCode )
 
    // Initializes command
    // cmd.exe /c /q allows us to execute internal dos commands too.
-   _stprintf( szCommand, _T("cmd.exe /q /c \"%s\""), pMsg->szCommand );
+   _stprintf_s( szCommand, _T("cmd.exe /q /c \"%s\""), pMsg->szCommand );
    
    // Start the requested process
    if ( CreateProcess( 

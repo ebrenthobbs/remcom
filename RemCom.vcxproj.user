@@ -4,7 +4,11 @@
     <ShowAllFiles>false</ShowAllFiles>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <LocalDebuggerCommandArguments>\\b-300769-w10 /user:corporate\brehobbs /pwd:S0forth! c:\windows\system32\cmd.exe</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>\\b-300769-w10 /user:corporate\brehobbs /pwd:S0forth! cmd.exe</LocalDebuggerCommandArguments>
+    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <LocalDebuggerCommandArguments>//b-300769-w10 /user:corporate\brehobbs /pwd:S0forth! cmd.exe</LocalDebuggerCommandArguments>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
 </Project>
