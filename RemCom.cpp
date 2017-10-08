@@ -58,8 +58,11 @@
  // Constant Definitions
 #define		SIZEOF_BUFFER   0x100
 
+
 namespace RemCom
 {
+	using namespace std;
+
 	class RemCom
 	{
 	public:
@@ -73,11 +76,11 @@ namespace RemCom
 	private:
 
 		// Local Machine Settings
-		TCHAR		m_szThisMachine[SIZEOF_BUFFER] = _T("");
-		TCHAR		m_szPassword[SIZEOF_BUFFER] = _T("");
-		TCHAR		m_szArguments[SIZEOF_BUFFER] = _T("");
-		TCHAR		m_szConsoleTitle[SIZEOF_BUFFER] = _T("");
-		TCHAR		m_szLocalBinPath[_MAX_PATH] = _T("");
+		string		m_strThisMachine;
+		string		m_strPassword;
+		string		m_strArguments;
+		string		m_strConsoleTitle;
+		string		m_strLocalBinPath;
 
 		// Windows Default Windows Path
 		LPCTSTR		m_lpszSystemRoot = "%SystemRoot%";
@@ -365,17 +368,17 @@ namespace RemCom
 		}
 
 		// Gets the arguments parameter
-		void GetRemoteCommandArguments(LPTSTR lpszCommandArguments)
+		void GetRemoteCommandArguments(string strCommandArguments)
 		{
 			DWORD dwIndex = 0;
-			lpszCommandArguments[0] = _T('\0');
+			strCommandArguments = "";
 
 			if (GetNthParameter(3, dwIndex) != NULL)
 				for (int i = dwIndex; i < __argc; i++)
 				{
-					_tcscat(lpszCommandArguments, __targv[i]);
+					strCommandArguments += __targv[i];
 					if (i + 1 < __argc)
-						_tcscat(lpszCommandArguments, _T(" "));
+						strCommandArguments += _T(" ");
 				}
 		}
 
@@ -419,7 +422,7 @@ namespace RemCom
 		}
 
 		// Gets the password
-		BOOL PromptForPassword(LPTSTR lpszPwd)
+		BOOL PromptForPassword()
 		{
 			HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
 			DWORD dwRead = 0;
@@ -429,11 +432,14 @@ namespace RemCom
 			// Turn off echo
 			if (EnableEcho(hInput, FALSE))
 			{
+				TCHAR lpszPwd[SIZEOF_BUFFER];
 				// Read password from console
 				::ReadConsole(hInput, lpszPwd, SIZEOF_BUFFER, &dwRead, NULL);
 
 				// Ignore ENTER (0x0D0A) 
 				lpszPwd[max(dwRead - 2, 0)] = _T('\0');
+
+				m_strPassword = lpszPwd;
 
 				// Turn echo on
 				EnableEcho(hInput, TRUE);
@@ -464,8 +470,8 @@ namespace RemCom
 			if (bPromptForPassword)
 			{
 				// We found user name, and * as password, which means prompt for password
-				m_lpszPassword = m_szPassword;
-				if (!PromptForPassword(m_szPassword))
+				m_lpszPassword = m_strPassword.c_str();
+				if (!PromptForPassword())
 					return FALSE;
 			}
 
@@ -543,7 +549,7 @@ namespace RemCom
 			TCHAR szRemoteResource[_MAX_PATH];
 
 			// Gets the file name and extension
-			_tsplitpath(m_lpszCommandExe, drive, dir, fname, ext);
+			_splitpath_s(m_lpszCommandExe, drive, dir, fname, ext);
 
 			_stprintf_s(szRemoteResource, _T("%s\\ADMIN$\\System32\\%s%s"), m_lpszMachine, fname, ext);
 
@@ -576,12 +582,24 @@ namespace RemCom
 			DWORD dwLocalBinarySize = ::SizeofResource(
 				hInstance,
 				hLocalBinRes);
-			GetCurrentDirectory(MAX_PATH, m_szLocalBinPath);
+			TCHAR lpTestBuffer[1];
+			DWORD dwPathLen = GetCurrentDirectory(1, lpTestBuffer);
+			if (dwPathLen > 0)
+			{
+				TCHAR* lpDirBuffer = new TCHAR[dwPathLen];
+				GetCurrentDirectory(dwPathLen, lpDirBuffer);
+				lpDirBuffer[dwPathLen] = 0;
+				m_strLocalBinPath = lpDirBuffer;
+				m_strLocalBinPath += "\\";
+				delete lpDirBuffer;
+			}
+			else
+				m_strLocalBinPath = "";
 
-			_stprintf_s(m_szLocalBinPath, _T("%s\\%s"), m_szLocalBinPath, ProcComs);
+			m_strLocalBinPath += ProcComs;
 
 			HANDLE hFileLocalBinary = CreateFile(
-				m_szLocalBinPath,
+				m_strLocalBinPath.c_str(),
 				GENERIC_WRITE,
 				0,
 				NULL,
@@ -736,11 +754,11 @@ namespace RemCom
 
 			// Info
 			pMsg->dwProcessId = GetCurrentProcessId();
-			_tcscpy(pMsg->szMachine, m_szThisMachine);
+			strcpy_s(pMsg->szMachine, m_strThisMachine.c_str());
 
 			// Cmd
 			if (!IsCmdLineParameter(_T("c")))
-				_stprintf_s(pMsg->szCommand, _T("%s %s"), m_lpszCommandExe, m_szArguments);
+				_stprintf_s(pMsg->szCommand, _T("%s %s"), m_lpszCommandExe, m_strArguments.c_str());
 			else
 			{
 				TCHAR drive[_MAX_DRIVE];
@@ -748,9 +766,9 @@ namespace RemCom
 				TCHAR fname[_MAX_FNAME];
 				TCHAR ext[_MAX_EXT];
 
-				_tsplitpath(m_lpszCommandExe, drive, dir, fname, ext);
+				_splitpath_s(m_lpszCommandExe, drive, dir, fname, ext);
 
-				_stprintf_s(pMsg->szCommand, _T("%s%s %s"), fname, ext, m_szArguments);
+				_stprintf_s(pMsg->szCommand, _T("%s%s %s"), fname, ext, m_strArguments.c_str());
 			}
 
 			// Priority
@@ -769,11 +787,13 @@ namespace RemCom
 			pMsg->bNoWait = IsCmdLineParameter(_T("nowait"));
 
 			if (lpszWorkingDir != NULL)
-				_tcscpy(pMsg->szWorkingDir, lpszWorkingDir);
+				strcpy_s(pMsg->szWorkingDir, lpszWorkingDir);
 
 			// Console Title
-			_stprintf_s(m_szConsoleTitle, _T("%s : %s"), m_lpszMachine, pMsg->szCommand);
-			SetConsoleTitle(m_szConsoleTitle);
+			m_strConsoleTitle = m_lpszMachine;
+			m_strConsoleTitle += " : ";
+			m_strConsoleTitle += pMsg->szCommand;
+			SetConsoleTitle(m_strConsoleTitle.c_str());
 
 			return TRUE;
 		}
@@ -788,7 +808,7 @@ namespace RemCom
 		void m_ListenRemoteOutPipeThread()
 		{
 			HANDLE hOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-			TCHAR szBuffer[SIZEOF_BUFFER];
+			TCHAR szBuffer[SIZEOF_BUFFER+1];
 			DWORD dwRead;
 
 			for (;;)
@@ -955,21 +975,21 @@ namespace RemCom
 			_stprintf_s(szStdOut, _T("%s\\pipe\\%s%s%d"),
 				m_lpszMachine,
 				RemComSTDOUT,
-				m_szThisMachine,
+				m_strThisMachine.c_str(),
 				GetCurrentProcessId());
 
 			// StdErr pipe name
 			_stprintf_s(szStdIn, _T("%s\\pipe\\%s%s%d"),
 				m_lpszMachine,
 				RemComSTDIN,
-				m_szThisMachine,
+				m_strThisMachine.c_str(),
 				GetCurrentProcessId());
 
 			// StdIn pipe name
 			_stprintf_s(szStdErr, _T("%s\\pipe\\%s%s%d"),
 				m_lpszMachine,
 				RemComSTDERR,
-				m_szThisMachine,
+				m_strThisMachine.c_str(),
 				GetCurrentProcessId());
 
 			while (dwRetryCount--)
@@ -1051,7 +1071,13 @@ namespace RemCom
 			BuildMessageStructure(&msg);
 
 			// Send message to service
-			WriteFile(m_hCommandPipe, &msg, sizeof(msg), &dwTemp, NULL);
+			BOOL bSuccess = WriteFile(m_hCommandPipe, &msg, sizeof(msg), &dwTemp, NULL);
+			if (!bSuccess)
+			{
+				DWORD dwLastError = GetLastError();
+				_tprintf(_T("\nCould not send command to remote service. Returned error code is %d(0x%X)\n", dwLastError, dwLastError));
+				return FALSE;
+			}
 
 			// Connects to remote pipes (stdout, stdin, stderr)
 			if (ConnectToRemotePipes(5, 1000))
@@ -1928,7 +1954,7 @@ namespace RemCom
 
 			m_lpszCommandExe = GetNthParameter(2, dwIndex);
 
-			GetRemoteCommandArguments(m_szArguments);
+			GetRemoteCommandArguments(m_strArguments);
 
 			ShowCopyRight();
 
@@ -1945,18 +1971,21 @@ namespace RemCom
 
 
 			// Initialize console's title
-			_stprintf_s(m_szConsoleTitle, _T("%s : Starting Connection to: "), m_lpszMachine);
-			SetConsoleTitle(m_szConsoleTitle);
+			m_strConsoleTitle = m_lpszMachine;
+			m_strConsoleTitle += " : Starting Connection to: ";
+			SetConsoleTitle(m_strConsoleTitle.c_str());
 
 			// Sets our Ctrl handler
 			SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 
 			// Gets our computer's name
-			if (!GetComputerName(m_szThisMachine, &dwTemp))
+			TCHAR lpszThisMachine[SIZEOF_BUFFER];
+			if (!GetComputerName(lpszThisMachine, &dwTemp))
 			{
 				Out(_T("GetComputerName() failed. Use a valid name! :)\n"));
 				return -3;
 			}
+			m_strThisMachine = lpszThisMachine;
 
 			// Check the user/pwd from command line, and prompts
 			// for the password if needed
@@ -1979,7 +2008,7 @@ namespace RemCom
 				if (ExtractLocalBinaryResource()) {
 					Out(_T("Launching Local Process ...\n"));
 					TCHAR szExeCmdAsUser[MAX_PATH] = _T("");
-					sprintf_s(szExeCmdAsUser, _T("%s %s %s %s"), m_szLocalBinPath, m_lpszUser, m_lpszPassword, m_lpszCommandExe);
+					sprintf_s(szExeCmdAsUser, _T("%s %s %s %s"), m_strLocalBinPath.c_str(), m_lpszUser, m_lpszPassword, m_lpszCommandExe);
 
 					/*		printf("lpszUser is %s \n",lpszUser);
 					printf("lpszPassword is %s \n",lpszPassword);
@@ -1989,7 +2018,7 @@ namespace RemCom
 					if (!StartLocalProcess(szExeCmdAsUser)) {
 						Out(_T("Create Local Process Failed. Illegal Command"));
 					}
-					DeleteFile(m_szLocalBinPath);
+					DeleteFile(m_strLocalBinPath.c_str());
 				}
 				else {
 					Out(_T("Cannot Extract Local Resources. Please check write access to local tmp filesystem\n"));
