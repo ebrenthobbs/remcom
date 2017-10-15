@@ -37,7 +37,8 @@
 #include <stdlib.h>
 #include <process.h>
 #include <thread>
-//#include <iostream.h>
+#include <iostream>
+#include <sstream>
 #include <userenv.h>
 #include "ProcFunctions.h"
 //#include <strsafe.h>
@@ -46,7 +47,7 @@
 #define SERVICENAME        _T("RemComSvc")
 #define LONGSERVICENAME    _T("RemCom Service")
 
-#define RemComSVCEXE     _T("RemComSvc.exe")
+#define RemComSVCEXE     "RemComSvc.exe"
 #define ProcComs         _T("ProcComs.bin")
 
 #define RemComCOMM           _T("RemCom_communicaton")
@@ -54,8 +55,10 @@
 #define RemComSTDIN          _T("RemCom_stdin")
 #define RemComSTDERR         _T("RemCom_stderr")
 
-#define Out(x)       { _ftprintf( stdout, _T("%s"), x); fflush(stdout); }
-#define Error(x)        { _ftprintf( stderr, _T("%s"), x); fflush(stderr); }
+#define SYSTEMROOT "%SystemRoot%"
+#define SYSTEM32 SYSTEMROOT "\\system32"
+#define LOCALHOST "\\\\localhost"
+#define LOOPBACKIP "\\\\127.0.0.1"
 
 class RemComMessage
 {

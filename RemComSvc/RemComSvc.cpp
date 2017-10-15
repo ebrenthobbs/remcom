@@ -36,286 +36,329 @@
 #include "RemComSvc.h"
 #include "../RemCom.h"
 
-void	CommunicationPoolThread(PVOID);
-void	CommunicationPipeThreadProc(PVOID);
-DWORD	Execute(RemComMessage*, DWORD*);
+namespace RemCom
+{
+	using namespace std;
 
-LONG	dwSvcPipeInstanceCount = 0;
-TCHAR	szStdOutPipe[_MAX_PATH] = _T("");
-TCHAR	szStdInPipe[_MAX_PATH] = _T("");
-TCHAR	szStdErrPipe[_MAX_PATH] = _T("");
+	class RemComSvc
+	{
+	public:
+		void StartCommunicationPoolThread()
+		{
+			// Start CommunicationPoolThread, which handles the incoming instances
+			_beginthread(RemCom::RemComSvc::CommunicationPoolThread, 0, this);
+		}
+
+	private:
+		HANDLE	m_hCommPipe = NULL;
+		LONG	dwSvcPipeInstanceCount = 0;
+		TCHAR	szCodeDisplayBuffer[40];
+
+		static void CommunicationPoolThread(PVOID pThis)
+		{
+			RemComSvc* pInstance = (RemComSvc*)pThis;
+			pInstance->CommunicationPoolThread();
+		}
+
+		// Communication Thread Pool, handles the incoming RemCom.exe requests
+		void CommunicationPoolThread()
+		{
+			for (;;)
+			{
+				SECURITY_ATTRIBUTES SecAttrib = { 0 };
+				SECURITY_DESCRIPTOR SecDesc;
+
+				InitializeSecurityDescriptor(&SecDesc, SECURITY_DESCRIPTOR_REVISION);
+				SetSecurityDescriptorDacl(&SecDesc, TRUE, NULL, TRUE);
+
+				SecAttrib.nLength = sizeof(SECURITY_ATTRIBUTES);
+				SecAttrib.lpSecurityDescriptor = &SecDesc;;
+				SecAttrib.bInheritHandle = TRUE;
+
+				// Create communication pipe
+				m_hCommPipe = CreateNamedPipe(
+					"\\\\.\\pipe\\" RemComCOMM,
+					PIPE_ACCESS_DUPLEX,
+					PIPE_TYPE_MESSAGE | PIPE_WAIT,
+					PIPE_UNLIMITED_INSTANCES,
+					0,
+					0,
+					(DWORD)-1,
+					&SecAttrib);
+
+				if (m_hCommPipe != NULL)
+				{
+					// Waiting for client to connect to this pipe
+					ConnectNamedPipe(m_hCommPipe, NULL);
+					_beginthread(CommunicationPipeThreadProc, 0, (void*)this);
+				}
+			}
+		}
+
+		LPCTSTR GetCodeDisplayString(DWORD dwCode)
+		{
+			_stprintf_s(szCodeDisplayBuffer, "%d(%08X)", dwCode, dwCode);
+			return szCodeDisplayBuffer;
+		}
+
+		void WriteEventLog(string strMessage)
+		{
+			//TCHAR szTempPathBuf[MAX_PATH];
+			//GetTempPath(MAX_PATH, szTempPathBuf);
+			//string logFilePath = szTempPathBuf;
+			string logFilePath = "C:/temp";
+			logFilePath += "/RemComSvc.log";
+			ofstream logStream;
+			logStream.open(logFilePath, ios_base::app);
+			logStream << strMessage.c_str() << endl;
+			logStream.close();
+		}
+
+		void WriteLastError(const string strPrefix)
+		{
+			string strMessage = strPrefix;
+			strMessage += GetCodeDisplayString(GetLastError());
+			WriteEventLog(strMessage);
+		}
+
+		void WriteLastError(const stringstream strPrefix)
+		{
+			const string strTemp = strPrefix.str();
+			WriteLastError(strTemp);
+		}
+
+		void WriteLastError(LPCTSTR szPrefix)
+		{
+			string strPrefix = szPrefix;
+			WriteLastError(strPrefix);
+		}
+
+		// Handles a client
+		static void CommunicationPipeThreadProc(void* pThis)
+		{
+			RemComSvc* pInstance = (RemComSvc*)pThis;
+			pInstance->CommunicationPipeThreadProc();
+		}
+
+		void CommunicationPipeThreadProc()
+		{
+			RemComMessage msg;
+			RemComResponse response;
+
+			DWORD dwWritten;
+			DWORD dwRead;
+
+			// Increment instance counter 
+			InterlockedIncrement(&dwSvcPipeInstanceCount);
+
+			::ZeroMemory(&response, sizeof(response));
+
+			// Waiting for communication message from client
+			if (!ReadFile(m_hCommPipe, &msg, sizeof(msg), &dwRead, NULL) || dwRead == 0)
+			{
+				WriteLastError(_T("Could not read message from client. Error was "));
+				goto cleanup;
+			}
+			else
+			{
+				WriteEventLog(string(msg.szCommand));
+			}
+
+			// Execute the requested command
+			response.dwErrorCode = Execute(&msg, &response.dwReturnCode);
+
+			// Send back the response message (client is waiting for this response)
+			if (!WriteFile(m_hCommPipe, &response, sizeof(response), &dwWritten, NULL) || dwWritten == 0)
+			{
+				WriteLastError(_T("Could not write response to client. Error was "));
+				goto cleanup;
+			}
+
+		cleanup:
+
+			DisconnectNamedPipe(m_hCommPipe);
+			CloseHandle(m_hCommPipe);
+
+			// Decrement instance counter 
+			InterlockedDecrement(&dwSvcPipeInstanceCount);
+
+			// If this was the last client, let's stop ourself
+			if (dwSvcPipeInstanceCount == 0)
+				SetEvent(hStopServiceEvent);
+
+		}
+
+		const string CreatePipeName(LPCTSTR szBaseName, RemComMessage* pMsg)
+		{
+			stringstream strPipeName;
+			strPipeName << "\\\\.\\pipe\\" << szBaseName << pMsg->szMachine << pMsg->dwProcessId;
+			return strPipeName.str();
+		}
+
+		// Creates named pipes for stdout, stderr, stdin
+		BOOL CreateNamedPipes(RemComMessage* pMsg, STARTUPINFO* psi)
+		{
+			SECURITY_ATTRIBUTES SecAttrib = { 0 };
+			SECURITY_DESCRIPTOR SecDesc;
+
+			InitializeSecurityDescriptor(&SecDesc, SECURITY_DESCRIPTOR_REVISION);
+			SetSecurityDescriptorDacl(&SecDesc, TRUE, NULL, FALSE);
+
+			SecAttrib.nLength = sizeof(SECURITY_ATTRIBUTES);
+			SecAttrib.lpSecurityDescriptor = &SecDesc;;
+			SecAttrib.bInheritHandle = TRUE;
+
+			psi->dwFlags |= STARTF_USESTDHANDLES;
+			psi->hStdOutput = INVALID_HANDLE_VALUE;
+			psi->hStdInput = INVALID_HANDLE_VALUE;
+			psi->hStdError = INVALID_HANDLE_VALUE;
+
+			const string strStdOut = CreatePipeName(RemComSTDOUT, pMsg);
+			const char* szStdOut = strStdOut.c_str();
+			const string strStdIn = CreatePipeName(RemComSTDIN, pMsg);
+			const char* szStdIn = strStdIn.c_str();
+			const string strStdErr = CreatePipeName(RemComSTDERR, pMsg);
+			const char* szStdErr = strStdErr.c_str();
+
+			stringstream strMessage;
+			strMessage << "Creating named pipes for remote caller:"
+				<< " stdin=" << strStdIn
+				<< " stdout=" << strStdOut
+				<< " stderr=" << strStdErr;
+			WriteEventLog(strMessage.str());
+
+			// Create StdOut pipe
+			psi->hStdOutput = CreateNamedPipe(
+				szStdOut,
+				PIPE_ACCESS_OUTBOUND,
+				PIPE_TYPE_MESSAGE | PIPE_WAIT,
+				PIPE_UNLIMITED_INSTANCES,
+				0,
+				0,
+				(DWORD)-1,
+				&SecAttrib);
+			CheckPipeCreationError(psi->hStdOutput, szStdOut);
+
+			// Create StdError pipe
+			psi->hStdError = CreateNamedPipe(
+				szStdErr,
+				PIPE_ACCESS_OUTBOUND,
+				PIPE_TYPE_MESSAGE | PIPE_WAIT,
+				PIPE_UNLIMITED_INSTANCES,
+				0,
+				0,
+				(DWORD)-1,
+				&SecAttrib);
+			CheckPipeCreationError(psi->hStdError, szStdErr);
+
+			// Create StdIn pipe
+			psi->hStdInput = CreateNamedPipe(
+				szStdIn,
+				PIPE_ACCESS_INBOUND,
+				PIPE_TYPE_MESSAGE | PIPE_WAIT,
+				PIPE_UNLIMITED_INSTANCES,
+				0,
+				0,
+				(DWORD)-1,
+				&SecAttrib);
+			CheckPipeCreationError(psi->hStdInput, szStdIn);
+
+			if (psi->hStdOutput == INVALID_HANDLE_VALUE ||
+				psi->hStdError == INVALID_HANDLE_VALUE ||
+				psi->hStdInput == INVALID_HANDLE_VALUE)
+			{
+				CloseHandle(psi->hStdOutput);
+				CloseHandle(psi->hStdError);
+				CloseHandle(psi->hStdInput);
+
+				return FALSE;
+			}
+
+			// Waiting for client to connect to this pipe
+			ConnectNamedPipe(psi->hStdOutput, NULL);
+			ConnectNamedPipe(psi->hStdInput, NULL);
+			ConnectNamedPipe(psi->hStdError, NULL);
+
+			return TRUE;
+		}
+
+		void CheckPipeCreationError(HANDLE hPipe, const char* szPipeName)
+		{
+			if (hPipe != INVALID_HANDLE_VALUE)
+				return;
+			stringstream strMessage;
+			strMessage << "Error creating pipe " << szPipeName << ": ";
+			WriteLastError(strMessage.str());
+		}
+		
+		// Execute the requested client command
+		DWORD Execute(RemComMessage* pMsg, DWORD* pReturnCode)
+		{
+			DWORD rc;
+			PROCESS_INFORMATION pi;
+			STARTUPINFO si;
+
+			::ZeroMemory(&si, sizeof(si));
+			si.cb = sizeof(si);
+
+			// Creates named pipes for stdout, stdin, stderr
+			// Client will sit on these pipes
+			if (!CreateNamedPipes(pMsg, &si))
+				return 2;
+
+			*pReturnCode = 0;
+			rc = 0;
+
+			// Initializes command
+			// cmd.exe /c /q allows us to execute internal dos commands too.
+			stringstream strCommand;
+			strCommand << "cmd.exe /q /c \"" << pMsg->szCommand << "\"";
+			const string tmpCommand = strCommand.str();
+			LPTSTR szCommand = const_cast<LPTSTR>(tmpCommand.c_str());
+
+			// Start the requested process
+			if (CreateProcess(
+				NULL,
+				szCommand,
+				NULL,
+				NULL,
+				TRUE,
+				pMsg->dwPriority | CREATE_NO_WINDOW,
+				NULL,
+				pMsg->szWorkingDir[0] != _T('\0') ? pMsg->szWorkingDir : NULL,
+				&si,
+				&pi))
+			{
+				HANDLE hProcess = pi.hProcess;
+
+				*pReturnCode = 0;
+
+				// Waiting for process to terminate
+				if (!pMsg->bNoWait)
+				{
+					WaitForSingleObject(hProcess, INFINITE);
+					GetExitCodeProcess(hProcess, pReturnCode);
+				}
+			}
+			else
+				rc = 1;
+
+			return rc;
+		}
+	};
+}
 
 // Service "main" function
 void _ServiceMain(void*)
 {
-	// Start CommunicationPoolThread, which handles the incoming instances
-	_beginthread(CommunicationPoolThread, 0, NULL);
+	RemCom::RemComSvc service;
+
+	service.StartCommunicationPoolThread();
 
 	// Waiting for stop the service
 	while (WaitForSingleObject(hStopServiceEvent, 10) != WAIT_OBJECT_0)
 	{
 	}
 
-	// Let's delete itself, after the service stopped
-	DeleteSvc();
-
 	CloseHandle(hStopServiceEvent);
-}
-
-TCHAR szErrorCodeDisplayBuffer[40];
-LPCTSTR GetErrorCodeDisplayString(DWORD dwError)
-{
-	_stprintf(szErrorCodeDisplayBuffer, "%d(%08X)", dwError, dwError);
-	return szErrorCodeDisplayBuffer;
-}
-
-void WriteEventLog(std::string strMessage)
-{
-	//TCHAR szTempPathBuf[MAX_PATH];
-	//GetTempPath(MAX_PATH, szTempPathBuf);
-	//std::string logFilePath = szTempPathBuf;
-	std::string logFilePath = "C:/temp";
-	logFilePath += "/RemComSvc.log";
-	std::ofstream logStream;
-	logStream.open(logFilePath, std::ios_base::app);
-	logStream << strMessage.c_str() << "\n";
-	logStream.close();
-}
-
-void WriteLastError(LPCTSTR szPrefix)
-{
-	std::string strMessage = szPrefix;
-	strMessage += GetErrorCodeDisplayString(GetLastError());
-	WriteEventLog(strMessage);
-}
-
-// Communicaton Thread Pool, handles the incoming RemCom.exe requests
-void CommunicationPoolThread(PVOID)
-{
-	HANDLE hPipe = NULL;
-
-	for (;;)
-	{
-		SECURITY_ATTRIBUTES SecAttrib = { 0 };
-		SECURITY_DESCRIPTOR SecDesc;
-
-		InitializeSecurityDescriptor(&SecDesc, SECURITY_DESCRIPTOR_REVISION);
-		SetSecurityDescriptorDacl(&SecDesc, TRUE, NULL, TRUE);
-
-		SecAttrib.nLength = sizeof(SECURITY_ATTRIBUTES);
-		SecAttrib.lpSecurityDescriptor = &SecDesc;;
-		SecAttrib.bInheritHandle = TRUE;
-
-		// Create communication pipe
-		hPipe = CreateNamedPipe(
-			_T("\\\\.\\pipe\\")RemComCOMM,
-			PIPE_ACCESS_DUPLEX,
-			PIPE_TYPE_MESSAGE | PIPE_WAIT,
-			PIPE_UNLIMITED_INSTANCES,
-			0,
-			0,
-			(DWORD)-1,
-			&SecAttrib);
-
-		if (hPipe != NULL)
-		{
-			// Waiting for client to connect to this pipe
-			ConnectNamedPipe(hPipe, NULL);
-			_beginthread(CommunicationPipeThreadProc, 0, (void*)hPipe);
-		}
-	}
-}
-
-// Handles a client
-void CommunicationPipeThreadProc(void* pParam)
-{
-	HANDLE hPipe = (HANDLE)pParam;
-
-	RemComMessage msg;
-	RemComResponse response;
-
-	DWORD dwWritten;
-	DWORD dwRead;
-
-	// Increment instance counter 
-	InterlockedIncrement(&dwSvcPipeInstanceCount);
-
-	::ZeroMemory(&response, sizeof(response));
-
-	// Waiting for communication message from client
-	if (!ReadFile(hPipe, &msg, sizeof(msg), &dwRead, NULL) || dwRead == 0)
-	{
-		WriteLastError(_T("Could not read message from client. Error was "));
-		goto cleanup;
-	}
-	else
-	{
-		WriteEventLog(std::string(msg.szCommand));
-	}
-
-	// Execute the requested command
-	response.dwErrorCode = Execute(&msg, &response.dwReturnCode);
-
-	// Send back the response message (client is waiting for this response)
-	if (!WriteFile(hPipe, &response, sizeof(response), &dwWritten, NULL) || dwWritten == 0)
-	{
-		WriteLastError(_T("Could not write response to client. Error was "));
-		goto cleanup;
-	}
-
-cleanup:
-
-	DisconnectNamedPipe(hPipe);
-	CloseHandle(hPipe);
-
-	// Decrement instance counter 
-	InterlockedDecrement(&dwSvcPipeInstanceCount);
-
-	// If this was the last client, let's stop ourself
-	if (dwSvcPipeInstanceCount == 0)
-		SetEvent(hStopServiceEvent);
-
-}
-
-// Creates named pipes for stdout, stderr, stdin
-BOOL CreateNamedPipes(RemComMessage* pMsg, STARTUPINFO* psi)
-{
-	SECURITY_ATTRIBUTES SecAttrib = { 0 };
-	SECURITY_DESCRIPTOR SecDesc;
-
-	InitializeSecurityDescriptor(&SecDesc, SECURITY_DESCRIPTOR_REVISION);
-	SetSecurityDescriptorDacl(&SecDesc, TRUE, NULL, FALSE);
-
-	SecAttrib.nLength = sizeof(SECURITY_ATTRIBUTES);
-	SecAttrib.lpSecurityDescriptor = &SecDesc;;
-	SecAttrib.bInheritHandle = TRUE;
-
-	psi->dwFlags |= STARTF_USESTDHANDLES;
-	psi->hStdOutput = INVALID_HANDLE_VALUE;
-	psi->hStdInput = INVALID_HANDLE_VALUE;
-	psi->hStdError = INVALID_HANDLE_VALUE;
-
-	// StdOut pipe name
-	_stprintf_s(szStdOutPipe, _T("\\\\.\\pipe\\%s%s%d"),
-		RemComSTDOUT,
-		pMsg->szMachine,
-		pMsg->dwProcessId);
-
-	// StdIn pipe name
-	_stprintf_s(szStdInPipe, _T("\\\\.\\pipe\\%s%s%d"),
-		RemComSTDIN,
-		pMsg->szMachine,
-		pMsg->dwProcessId);
-
-	// StdError pipe name
-	_stprintf_s(szStdErrPipe, _T("\\\\.\\pipe\\%s%s%d"),
-		RemComSTDERR,
-		pMsg->szMachine,
-		pMsg->dwProcessId);
-
-	// Create StdOut pipe
-	psi->hStdOutput = CreateNamedPipe(
-		szStdOutPipe,
-		PIPE_ACCESS_OUTBOUND,
-		PIPE_TYPE_MESSAGE | PIPE_WAIT,
-		PIPE_UNLIMITED_INSTANCES,
-		0,
-		0,
-		(DWORD)-1,
-		&SecAttrib);
-
-	// Create StdError pipe
-	psi->hStdError = CreateNamedPipe(
-		szStdErrPipe,
-		PIPE_ACCESS_OUTBOUND,
-		PIPE_TYPE_MESSAGE | PIPE_WAIT,
-		PIPE_UNLIMITED_INSTANCES,
-		0,
-		0,
-		(DWORD)-1,
-		&SecAttrib);
-
-	// Create StdIn pipe
-	psi->hStdInput = CreateNamedPipe(
-		szStdInPipe,
-		PIPE_ACCESS_INBOUND,
-		PIPE_TYPE_MESSAGE | PIPE_WAIT,
-		PIPE_UNLIMITED_INSTANCES,
-		0,
-		0,
-		(DWORD)-1,
-		&SecAttrib);
-
-	if (psi->hStdOutput == INVALID_HANDLE_VALUE ||
-		psi->hStdError == INVALID_HANDLE_VALUE ||
-		psi->hStdInput == INVALID_HANDLE_VALUE)
-	{
-		CloseHandle(psi->hStdOutput);
-		CloseHandle(psi->hStdError);
-		CloseHandle(psi->hStdInput);
-
-		return FALSE;
-	}
-
-	// Waiting for client to connect to this pipe
-	ConnectNamedPipe(psi->hStdOutput, NULL);
-	ConnectNamedPipe(psi->hStdInput, NULL);
-	ConnectNamedPipe(psi->hStdError, NULL);
-
-	return TRUE;
-}
-
-// Execute the requested client command
-DWORD Execute(RemComMessage* pMsg, DWORD* pReturnCode)
-{
-	DWORD rc;
-	PROCESS_INFORMATION pi;
-	STARTUPINFO si;
-
-	::ZeroMemory(&si, sizeof(si));
-	si.cb = sizeof(si);
-
-	// Creates named pipes for stdout, stdin, stderr
-	// Client will sit on these pipes
-	if (!CreateNamedPipes(pMsg, &si))
-		return 2;
-
-	*pReturnCode = 0;
-	rc = 0;
-
-	// Initializes command
-	// cmd.exe /c /q allows us to execute internal dos commands too.
-	std::string strCommand = _T("cmd.exe /q /c \"");
-	strCommand += pMsg->szCommand;
-	strCommand += "\"";
-	LPSTR szCommand = const_cast<LPSTR>(strCommand.c_str());
-	
-	// Start the requested process
-	if (CreateProcess(
-		NULL,
-		szCommand,
-		NULL,
-		NULL,
-		TRUE,
-		pMsg->dwPriority | CREATE_NO_WINDOW,
-		NULL,
-		pMsg->szWorkingDir[0] != _T('\0') ? pMsg->szWorkingDir : NULL,
-		&si,
-		&pi))
-	{
-		HANDLE hProcess = pi.hProcess;
-
-		*pReturnCode = 0;
-
-		// Waiting for process to terminate
-		if (!pMsg->bNoWait)
-		{
-			WaitForSingleObject(hProcess, INFINITE);
-			GetExitCodeProcess(hProcess, pReturnCode);
-		}
-	}
-	else
-		rc = 1;
-
-	return rc;
 }

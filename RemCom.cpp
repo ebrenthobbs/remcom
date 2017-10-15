@@ -73,6 +73,70 @@ namespace RemCom
 			s_Instance = this;
 		}
 
+		int Run()
+		{
+			int   rc = 0;
+			DWORD dwTemp = SIZEOF_BUFFER;
+			DWORD dwIndex = 0;
+
+			m_lpszMachine = GetRemoteMachineName();
+
+			m_lpszCommandExe = GetNthParameter(2, dwIndex);
+
+			GetRemoteCommandArguments(m_strArguments);
+
+			// Show help, if parameters are incorrect, or /?,/h,/help
+			if (IsCmdLineParameter("h") ||
+				IsCmdLineParameter("?") ||
+				IsCmdLineParameter("help") ||
+				m_lpszCommandExe == NULL ||
+				m_lpszMachine == NULL)
+			{
+				ShowUsage();
+				return -1;
+			}
+
+			// Initialize console's title
+			m_strConsoleTitle = m_lpszMachine;
+			m_strConsoleTitle += " : Starting Connection to: ";
+			SetConsoleTitle(m_strConsoleTitle.c_str());
+
+			// Sets our Ctrl handler
+			SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+
+			// Gets our computer's name
+			TCHAR lpszThisMachine[MAX_COMPUTERNAME_LENGTH + 1];
+			if (!GetComputerName(lpszThisMachine, &dwTemp))
+			{
+				cout << "GetComputerName() failed. Use a valid name! :)\n" << flush;
+				return -3;
+			}
+			m_strThisMachine = lpszThisMachine;
+
+			// Check the user/pwd from command line, and prompts for the password if needed
+			if (!SetConnectionCredentials(FALSE))
+			{
+				rc = -2;
+				Cleanup();
+				return rc;
+			}
+
+			// If running locally do not connect to the ADMIN$ or IPC$
+			// Instead try to use the credentials provided to RUNAS command
+			if (IsLocalMachine())
+			{
+				RunOnLocalMachine();
+			}
+			else
+			{
+				rc = RunOnRemoteMachine();
+			}
+
+			Cleanup();
+
+			return rc;
+		}
+
 	private:
 
 		// Local Machine Settings
@@ -81,11 +145,6 @@ namespace RemCom
 		string		m_strArguments;
 		string		m_strConsoleTitle;
 		string		m_strLocalBinPath;
-
-		// Windows Default Windows Path
-		LPCTSTR		m_lpszSystemRoot = "%SystemRoot%";
-		LPCTSTR		m_lpszLocalMachine = "\\\\localhost";
-		LPCTSTR		m_lpszLocalIP = "\\\\127.0.0.1";
 
 		// Remote Parameters
 		LPCTSTR		m_lpszMachine = NULL;
@@ -118,9 +177,7 @@ namespace RemCom
 				NULL
 			);
 
-			//	Error( _T("Error code = %d.\n", GetLastError()) );
-			Error((LPCTSTR)lpvMessageBuffer);
-			Error(_T("\n"));
+			cerr << (LPCTSTR)lpvMessageBuffer << "\n";
 
 			LocalFree(lpvMessageBuffer);
 			//ExitProcess(GetLastError());
@@ -378,7 +435,7 @@ namespace RemCom
 				{
 					strCommandArguments += __targv[i];
 					if (i + 1 < __argc)
-						strCommandArguments += _T(" ");
+						strCommandArguments += " ";
 				}
 		}
 
@@ -389,18 +446,17 @@ namespace RemCom
 			LPCTSTR lpszMachine = GetNthParameter(1, dwIndex);
 
 			if (lpszMachine == NULL)
-				// return NULL;
-				return m_lpszLocalIP;
+				return LOOPBACKIP;
 
-			if (_tcsnicmp(lpszMachine, _T(" "), 2) == 0)
-				return m_lpszLocalIP;
+			if (_tcsnicmp(lpszMachine, " ", 2) == 0)
+				return LOOPBACKIP;
 
-			if (_tcsnicmp(lpszMachine, _T("\\\\"), 2) == 0)
+			if (_tcsnicmp(lpszMachine, "\\\\", 2) == 0)
 				return lpszMachine;
-			// If a dot is entered we take it as localhost
-			if (_tcsnicmp(lpszMachine, _T("."), 2) == 0)
-				return m_lpszLocalIP;
 
+			// If a dot is entered we take it as localhost
+			if (_tcsnicmp(lpszMachine, ".", 2) == 0)
+				return LOOPBACKIP;
 
 			return NULL;
 		}
@@ -427,7 +483,7 @@ namespace RemCom
 			HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
 			DWORD dwRead = 0;
 
-			Out(_T("Enter Password: "));
+			cout << "Enter Password: " << flush;
 
 			// Turn off echo
 			if (EnableEcho(hInput, FALSE))
@@ -444,13 +500,13 @@ namespace RemCom
 				// Turn echo on
 				EnableEcho(hInput, TRUE);
 
-				Out(_T("\n\n"));
+				cout << "\n\n" << flush;
 			}
 			else
 			{
 				//Console input doesn't support echo on/off
-				Out(_T("\n"));
-				Error(_T("Couldn't turn off echo to hide password chars.\n"));
+				cout << "\n" << flush;
+				cerr << "Couldn't turn off echo to hide password chars.\n";
 			}
 
 			return TRUE;
@@ -459,11 +515,11 @@ namespace RemCom
 		BOOL SetConnectionCredentials(BOOL bPromptForPassword)
 		{
 			// Check the command line
-			m_lpszPassword = GetParamValue(_T("pwd:"));
-			m_lpszUser = GetParamValue(_T("user:"));
+			m_lpszPassword = GetParamValue("pwd:");
+			m_lpszUser = GetParamValue("user:");
 
 			if (m_lpszUser != NULL && m_lpszPassword != NULL && !bPromptForPassword)
-				if (_tcscmp(m_lpszPassword, _T("*")) == 0)
+				if (_tcscmp(m_lpszPassword, "*") == 0)
 					// We found user name, and * as password, which means prompt for password
 					bPromptForPassword = TRUE;
 
@@ -481,12 +537,15 @@ namespace RemCom
 		// Establish Connection to Remote Machine
 		BOOL EstablishConnection(LPCTSTR lpszRemote, LPCTSTR lpszResource, BOOL bEstablish)
 		{
-			TCHAR szRemoteResource[_MAX_PATH];
 
 			DWORD rc;
 
 			// Remote resource, \\remote\ipc$, remote\admin$, ...
-			_stprintf_s(szRemoteResource, _T("%s\\%s"), lpszRemote, lpszResource);
+			stringstream strRemoteResource;
+			strRemoteResource << lpszRemote << "\\" << lpszResource;
+			auto str = strRemoteResource.str();
+			auto c_str = str.c_str();
+			LPTSTR szRemoteResource = const_cast<LPTSTR>(c_str);
 
 			//
 			// disconnect or connect to the resource, based on bEstablish
@@ -496,7 +555,7 @@ namespace RemCom
 				NETRESOURCE nr;
 				nr.dwType = RESOURCETYPE_ANY;
 				nr.lpLocalName = NULL;
-				nr.lpRemoteName = (LPTSTR)&szRemoteResource;
+				nr.lpRemoteName = szRemoteResource;
 				nr.lpProvider = NULL;
 
 				//Establish connection (using username/pwd)
@@ -514,9 +573,9 @@ namespace RemCom
 					// Prompt for password if the default(NULL) was not good
 					if (m_lpszUser != NULL && m_lpszPassword == NULL)
 					{
-						Out(_T("Invalid password\n\n"));
+						cout << "Invalid password\n\n" << flush;
 						SetConnectionCredentials(TRUE);
-						Out(_T("Connecting to remote service ... "));
+						cout << "Connecting to remote service ... " << flush;
 						//Establish connection (using username/pwd) again
 						rc = WNetAddConnection2(&nr, m_lpszPassword, m_lpszUser, FALSE);
 					}
@@ -539,19 +598,19 @@ namespace RemCom
 		// This function called, if the /c option is used
 		BOOL CopyBinaryToRemoteSystem()
 		{
-			if (!IsCmdLineParameter(_T("c")))
+			if (!IsCmdLineParameter("c"))
 				return TRUE;
 
 			TCHAR drive[_MAX_DRIVE];
 			TCHAR dir[_MAX_DIR];
 			TCHAR fname[_MAX_FNAME];
 			TCHAR ext[_MAX_EXT];
-			TCHAR szRemoteResource[_MAX_PATH];
 
 			// Gets the file name and extension
 			_splitpath_s(m_lpszCommandExe, drive, dir, fname, ext);
-
-			_stprintf_s(szRemoteResource, _T("%s\\ADMIN$\\System32\\%s%s"), m_lpszMachine, fname, ext);
+			stringstream strRemoteResource;
+			strRemoteResource << m_lpszMachine << "\\ADMIN$\\System32\\" << fname << ext;
+			const char* szRemoteResource = strRemoteResource.str().c_str();
 
 			// Copy the Command's exe file to \\remote\ADMIN$\System32
 			return CopyFile(m_lpszCommandExe, szRemoteResource, FALSE);
@@ -568,7 +627,7 @@ namespace RemCom
 			HRSRC hLocalBinRes = ::FindResource(
 				hInstance,
 				MAKEINTRESOURCE(IDR_ProcComs),
-				_T("ProcComs"));
+				"ProcComs");
 
 			HGLOBAL hLocalBinary = ::LoadResource(
 				hInstance,
@@ -610,7 +669,7 @@ namespace RemCom
 				return FALSE;
 
 			WriteFile(hFileLocalBinary, pLocalBinary, dwLocalBinarySize, &dwWritten, NULL);
-			//	Out( _T("File Written ...\n") ); 
+			//	cout <<  "File Written ...\n"  << flush; 
 			//	Sleep(10000);
 			CloseHandle(hFileLocalBinary);
 
@@ -628,7 +687,7 @@ namespace RemCom
 			HRSRC hSvcExecutableRes = ::FindResource(
 				hInstance,
 				MAKEINTRESOURCE(IDR_RemComSVC),
-				_T("RemComSVC"));
+				"RemComSVC");
 
 			HGLOBAL hSvcExecutable = ::LoadResource(
 				hInstance,
@@ -643,13 +702,12 @@ namespace RemCom
 				hInstance,
 				hSvcExecutableRes);
 
-			TCHAR szSvcExePath[_MAX_PATH];
-
-			_stprintf_s(szSvcExePath, _T("%s\\ADMIN$\\System32\\%s"), m_lpszMachine, RemComSVCEXE);
+			string strSvcExePath = m_lpszMachine;
+			strSvcExePath += "\\ADMIN$\\System32\\" RemComSVCEXE;
 
 			// Copy binary file from resources to \\remote\ADMIN$\System32
 			HANDLE hFileSvcExecutable = CreateFile(
-				szSvcExePath,
+				strSvcExePath.c_str(),
 				GENERIC_WRITE,
 				0,
 				NULL,
@@ -686,7 +744,7 @@ namespace RemCom
 					SERVICE_ALL_ACCESS,
 					SERVICE_WIN32_OWN_PROCESS,
 					SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
-					_T("%SystemRoot%\\system32\\")RemComSVCEXE,
+					SYSTEM32 "\\" RemComSVCEXE,
 					NULL, NULL, NULL, NULL, NULL);
 
 			if (hService == NULL)
@@ -708,10 +766,11 @@ namespace RemCom
 		// Connects to the remote service
 		BOOL ConnectToRemoteService(DWORD dwRetry, DWORD dwRetryTimeOut)
 		{
-			TCHAR szPipeName[_MAX_PATH] = _T("");
-
 			// Remote service communication pipe name
-			_stprintf_s(szPipeName, _T("%s\\pipe\\%s"), m_lpszMachine, RemComCOMM);
+			stringstream strPipeName;
+			strPipeName << m_lpszMachine << "\\pipe\\" << RemComCOMM;
+			const string& tmpPipeName = strPipeName.str();
+			const char* szPipeName = tmpPipeName.c_str();
 
 			SECURITY_ATTRIBUTES SecAttrib = { 0 };
 			SECURITY_DESCRIPTOR SecDesc;
@@ -750,15 +809,16 @@ namespace RemCom
 		// This structure will be transferred to remote machine
 		BOOL BuildMessageStructure(RemComMessage* pMsg)
 		{
-			LPCTSTR lpszWorkingDir = GetParamValue(_T("d:"));
+			LPCTSTR lpszWorkingDir = GetParamValue("d:");
+			const char* szArguments = m_strArguments.c_str();
 
 			// Info
 			pMsg->dwProcessId = GetCurrentProcessId();
 			strcpy_s(pMsg->szMachine, m_strThisMachine.c_str());
 
 			// Cmd
-			if (!IsCmdLineParameter(_T("c")))
-				_stprintf_s(pMsg->szCommand, _T("%s %s"), m_lpszCommandExe, m_strArguments.c_str());
+			if (!IsCmdLineParameter("c"))
+				_stprintf_s(pMsg->szCommand, "%s %s", m_lpszCommandExe, szArguments);
 			else
 			{
 				TCHAR drive[_MAX_DRIVE];
@@ -768,23 +828,23 @@ namespace RemCom
 
 				_splitpath_s(m_lpszCommandExe, drive, dir, fname, ext);
 
-				_stprintf_s(pMsg->szCommand, _T("%s%s %s"), fname, ext, m_strArguments.c_str());
+				_stprintf_s(pMsg->szCommand, "%s%s %s", fname, ext, szArguments);
 			}
 
 			// Priority
-			if (IsCmdLineParameter(_T("realtime")))
+			if (IsCmdLineParameter("realtime"))
 				pMsg->dwPriority = REALTIME_PRIORITY_CLASS;
 			else
-				if (IsCmdLineParameter(_T("high")))
+				if (IsCmdLineParameter("high"))
 					pMsg->dwPriority = HIGH_PRIORITY_CLASS;
 				else
-					if (IsCmdLineParameter(_T("idle")))
+					if (IsCmdLineParameter("idle"))
 						pMsg->dwPriority = IDLE_PRIORITY_CLASS;
 					else
 						pMsg->dwPriority = NORMAL_PRIORITY_CLASS; // default
 
 			// No wait
-			pMsg->bNoWait = IsCmdLineParameter(_T("nowait"));
+			pMsg->bNoWait = IsCmdLineParameter("nowait");
 
 			if (lpszWorkingDir != NULL)
 				strcpy_s(pMsg->szWorkingDir, lpszWorkingDir);
@@ -802,10 +862,10 @@ namespace RemCom
 		// Remote process will send its stdout to this pipe
 		static void ListenRemoteOutPipeThread(void*)
 		{
-			s_Instance->m_ListenRemoteOutPipeThread();
+			s_Instance->ListenRemoteOutPipeThread();
 		}
 
-		void m_ListenRemoteOutPipeThread()
+		void ListenRemoteOutPipeThread()
 		{
 			HANDLE hOutput = GetStdHandle(STD_OUTPUT_HANDLE);
 			TCHAR szBuffer[SIZEOF_BUFFER+1];
@@ -851,7 +911,7 @@ namespace RemCom
 				szBuffer[dwRead / sizeof(TCHAR)] = _T('\0');
 
 				// Send it to our stdout
-				Out(szBuffer);
+				cout << szBuffer << flush;
 			}
 
 			CloseHandle(m_hRemoteOutPipe);
@@ -865,10 +925,10 @@ namespace RemCom
 		// Remote process will send its stderr to this pipe
 		static void ListenRemoteErrorPipeThread(void*)
 		{
-			s_Instance->m_ListenRemoteErrorPipeThread();
+			s_Instance->ListenRemoteErrorPipeThread();
 		}
 
-		void m_ListenRemoteErrorPipeThread()
+		void ListenRemoteErrorPipeThread()
 		{
 			TCHAR szBuffer[SIZEOF_BUFFER];
 			DWORD dwRead;
@@ -886,7 +946,7 @@ namespace RemCom
 				szBuffer[dwRead / sizeof(TCHAR)] = _T('\0');
 
 				// Write it to our stderr
-				Error(szBuffer);
+				cerr << szBuffer;
 			}
 
 			CloseHandle(m_hRemoteErrorPipe);
@@ -901,13 +961,13 @@ namespace RemCom
 		// ReadConsole return after pressing the ENTER
 		static void ListenRemoteStdInputPipeThread(void*)
 		{
-			s_Instance->m_ListenRemoteStdInputPipeThread();
+			s_Instance->ListenRemoteStdInputPipeThread();
 		}
 
-		void m_ListenRemoteStdInputPipeThread()
+		void ListenRemoteStdInputPipeThread()
 		{
 			HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
-			TCHAR szInputBuffer[SIZEOF_BUFFER] = _T("");
+			TCHAR szInputBuffer[SIZEOF_BUFFER] = "";
 			DWORD nBytesRead;
 			DWORD nBytesWrote;
 
@@ -949,14 +1009,16 @@ namespace RemCom
 			//std::thread([=] { m_ListenRemoteStdInputPipeThread(); });
 		}
 
+		const string CreateRemotePipeName(LPCSTR szPipeBaseName)
+		{
+			stringstream strPipeName;
+			strPipeName << m_lpszMachine << "\\pipe\\" << szPipeBaseName << m_strThisMachine << GetCurrentProcessId();
+			return strPipeName.str();
+		}
+
 		// Connects to the remote processes stdout, stderr and stdin named pipes
 		BOOL ConnectToRemotePipes(DWORD dwRetryCount, DWORD dwRetryTimeOut)
 		{
-			TCHAR szStdOut[_MAX_PATH];
-			TCHAR szStdIn[_MAX_PATH];
-			TCHAR szStdErr[_MAX_PATH];
-
-
 			SECURITY_ATTRIBUTES SecAttrib = { 0 };
 			SECURITY_DESCRIPTOR SecDesc;
 
@@ -971,26 +1033,12 @@ namespace RemCom
 			m_hRemoteStdInputPipe = INVALID_HANDLE_VALUE;
 			m_hRemoteErrorPipe = INVALID_HANDLE_VALUE;
 
-			// StdOut pipe name
-			_stprintf_s(szStdOut, _T("%s\\pipe\\%s%s%d"),
-				m_lpszMachine,
-				RemComSTDOUT,
-				m_strThisMachine.c_str(),
-				GetCurrentProcessId());
-
-			// StdErr pipe name
-			_stprintf_s(szStdIn, _T("%s\\pipe\\%s%s%d"),
-				m_lpszMachine,
-				RemComSTDIN,
-				m_strThisMachine.c_str(),
-				GetCurrentProcessId());
-
-			// StdIn pipe name
-			_stprintf_s(szStdErr, _T("%s\\pipe\\%s%s%d"),
-				m_lpszMachine,
-				RemComSTDERR,
-				m_strThisMachine.c_str(),
-				GetCurrentProcessId());
+			const string strStdOut = CreateRemotePipeName(RemComSTDOUT);
+			const char* szStdOut = strStdOut.c_str();
+			const string strStdIn = CreateRemotePipeName(RemComSTDIN);
+			const char* szStdIn = strStdIn.c_str();
+			const string strStdErr = CreateRemotePipeName(RemComSTDERR);
+			const char* szStdErr = strStdErr.c_str();
 
 			while (dwRetryCount--)
 			{
@@ -1075,31 +1123,34 @@ namespace RemCom
 			if (!bSuccess)
 			{
 				DWORD dwLastError = GetLastError();
-				_tprintf(_T("\nCould not send command to remote service. Returned error code is %d(0x%X)\n", dwLastError, dwLastError));
+				cout << "\nCould not send command to remote service. Returned error code is " << DisplayableCode(dwLastError) << endl;
 				return FALSE;
 			}
 
 			// Connects to remote pipes (stdout, stdin, stderr)
 			if (ConnectToRemotePipes(5, 1000))
 			{
-				Out(_T("Ok\n\n"));
+				cout << "Ok\n\n" << flush;
 
 				// Waiting for response from service
 				ReadFile(m_hCommandPipe, &response, sizeof(response), &dwTemp, NULL);
 			}
 			else
-				Out(_T("Failed\n\n"));
+				cout << "Failed\n\n" << flush;
 
 			if (response.dwErrorCode == 0)
-				_tprintf(_T("\nRemote command returned %d(0x%X)\n"),
-					response.dwReturnCode,
-					response.dwReturnCode);
+				cout << "\nRemote command returned " << DisplayableCode(response.dwReturnCode) << endl;
 			else
-				_tprintf(_T("\nRemote command failed to start. Returned error code is %d(0x%X)\n"),
-					response.dwErrorCode,
-					response.dwErrorCode);
+				cout << "\nRemote command failed to start. Returned error code is " << DisplayableCode(response.dwErrorCode) << endl;
 
 			return TRUE;
+		}
+
+		static LPCTSTR DisplayableCode(DWORD dwError)
+		{
+			static TCHAR szBuf[40];
+			_stprintf_s(szBuf, "%d(0x%X)", dwError, dwError);
+			return szBuf;
 		}
 
 		static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType)
@@ -1114,71 +1165,60 @@ namespace RemCom
 			return FALSE;
 		}
 
-
-		void ShowCopyRight()
-		{
-			Out(_T("\n"));
-			Out(_T("  Remote Command Executor\n"));
-			Out(_T("  Copyright 2006 The WiseGuyz [ http://talhatariq.wordpress.com ] \n"));
-			Out(_T("  Author: Talha Tariq [talha.tariq@gmail.com]\n"));
-			Out(_T("\n"));
-		}
-
 		void ShowUsage()
 		{
-			Out(_T("------------------------------------------------------------------\n"));
-			Out(_T("| Usage: RemCom.exe [\\\\computer] [options] [cmd/exe arguments] |\n"));
-			Out(_T("------------------------------------------------------------------\n"));
-			Out(_T("\n"));
-			Out(_T("Options:\n"));
-			Out(_T("\n"));
-			Out(_T(" /user:UserName\t\tUserName for Remote Connection\n"));
-			Out(_T(" /pwd:[password|*]\tPassword. * will delay the input (if required)\n"));
-			Out(_T("\n"));
-			Out(_T(" /d:directory\t\tSet working directory\n"));
-			Out(_T("\t\t\t(Default: \\\\RemoteSystem\"%SystemRoot%\\System32\")\n\n"));
-			Out(_T(" [/idle | /normal | /high | /realtime]\tPriority class (use only one)\n"));
-			Out(_T("  /nowait\t\tDon't wait for remote process to terminate\n"));
-			Out(_T("\n"));
-			Out(_T(" /c\t\t\tCopy the specified program to the remote machine's\n"));
-			Out(_T("   \t\t\t\"%SystemRoot%\\System32\" directory\n"));
-			Out(_T("   \t\t\tCommand's exe file must be absolute to local machine\n"));
-			Out(_T("\n"));
-			Out(_T("   .........................................................................\n"));
-			Out(_T("\n"));
-			Out(_T("Examples:\n"));
-			Out(_T("\n"));
-			Out(_T(" RemCom.exe \\\\remote cmd\t[Starts a \"telnet\" client]\n"));
-			Out(_T(" RemCom.exe \\\\remote /user:Username /pwd:Password cmd.exe\t[Starts a \"telnet\" client]\n"));
-			Out(_T(" RemCom.exe \\\\localhost /user:Username /pwd:Password  \"C:\\InstallMe.bat\"\t[A replacement for RunAs Command]\"\n"));
-			Out(_T("\n"));
-			Out(_T("   .........................................................................\n"));
-			Out(_T("\n"));
-			Out(_T("Notes:\n"));
-			Out(_T("\n"));
-			Out(_T("-  A \".\" for Machine Name will be treated as localhost\n"));
-			Out(_T("-  Input is passed to remote machine when you press the ENTER.\n"));
-			Out(_T("-  Ctrl-C terminates the remote process\n"));
-			Out(_T("-  Command and file path arguments have to be absolute to remote machine\n"));
-			Out(_T("-  If you are using /c option, command exe file path must be absolute to\n"));
-			Out(_T("   local machine, but the arguments must be absolute to remote machine\n"));
-			Out(_T("-  A dot . for machine name is taken as localhost\n"));
-			Out(_T("-  Not providing any credentials, the Process will (impersonate and) run\n"));
-			Out(_T("   in the context of your account on the remote system, but will not have\n"));
-			Out(_T("   access to network resources \n"));
-			Out(_T("-  Specify a valid user name in the Domain\\User syntax if the remote process\n"));
-			Out(_T("   requires access to network resources or to run in a different account. \n"));
-			Out(_T("-  The password is transmitted in clear text to the remote system.\n"));
-			Out(_T("-  You can enclose applications that have spaces in their name with \n"));
-			Out(_T("   quotation marks  e.g. RemCom \\\\computername \"c:\\long name app.exe\".\\n"));
-			Out(_T("-  Input is only passed to the remote system when you press the enter key \n"));
-			Out(_T("-  Typing Ctrl-C terminates the remote process.            \n"));
-			Out(_T("-  Error codes returned by RemCom are specific to the applications you execute, not RemCom.\n"));
-			Out(_T(" \n"));
-			Out(_T("   .........................................................................\n"));
-
+			cout << "------------------------------------------------------------------\n"
+			     << "| Usage: RemCom.exe [\\\\computer] [options] [cmd/exe arguments] |\n"
+			     << "------------------------------------------------------------------\n"
+			     << "\n"
+			     << "Options:\n"
+			     << "\n"
+			     << " /user:UserName\t\tUserName for Remote Connection\n"
+			     << " /pwd:[password|*]\tPassword. * will delay the input (if required)\n"
+			     << "\n"
+			     << " /d:directory\t\tSet working directory\n"
+			     << "\t\t\t(Default: \\\\RemoteSystem\"%SystemRoot%\\System32\")\n\n"
+			     << " [/idle | /normal | /high | /realtime]\tPriority class (use only one)\n"
+			     << "  /nowait\t\tDon't wait for remote process to terminate\n"
+			     << "\n"
+			     << " /c\t\t\tCopy the specified program to the remote machine's\n"
+			     << "   \t\t\t\"%SystemRoot%\\System32\" directory\n"
+			     << "   \t\t\tCommand's exe file must be absolute to local machine\n"
+			     << "\n"
+			     << "   .........................................................................\n"
+			     << "\n"
+			     << "Examples:\n"
+			     << "\n"
+			     << " RemCom.exe \\\\remote cmd\t[Starts a \"telnet\" client]\n"
+			     << " RemCom.exe \\\\remote /user:Username /pwd:Password cmd.exe\t[Starts a \"telnet\" client]\n"
+			     << " RemCom.exe \\\\localhost /user:Username /pwd:Password  \"C:\\InstallMe.bat\"\t[A replacement for RunAs Command]\"\n"
+			     << "\n"
+			     << "   .........................................................................\n"
+			     << "\n"
+			     << "Notes:\n"
+			     << "\n"
+			     << "-  A \".\" for Machine Name will be treated as localhost\n"
+			     << "-  Input is passed to remote machine when you press the ENTER.\n"
+			     << "-  Ctrl-C terminates the remote process\n"
+			     << "-  Command and file path arguments have to be absolute to remote machine\n"
+			     << "-  If you are using /c option, command exe file path must be absolute to\n"
+			     << "   local machine, but the arguments must be absolute to remote machine\n"
+			     << "-  A dot . for machine name is taken as localhost\n"
+			     << "-  Not providing any credentials, the Process will (impersonate and) run\n"
+			     << "   in the context of your account on the remote system, but will not have\n"
+			     << "   access to network resources \n"
+			     << "-  Specify a valid user name in the Domain\\User syntax if the remote process\n"
+			     << "   requires access to network resources or to run in a different account. \n"
+			     << "-  The password is transmitted in clear text to the remote system.\n"
+			     << "-  You can enclose applications that have spaces in their name with \n"
+			     << "   quotation marks  e.g. RemCom \\\\computername \"c:\\long name app.exe\".\\n"
+			     << "-  Input is only passed to the remote system when you press the enter key \n"
+			     << "-  Typing Ctrl-C terminates the remote process.            \n"
+			     << "-  Error codes returned by RemCom are specific to the applications you execute, not RemCom.\n"
+			     << " \n"
+			     << "   .........................................................................\n"
+				 << flush;
 		}
-
 
 		BOOL StartInteractiveClientProcess(
 			LPTSTR lpszUsername,    // client to log on
@@ -1296,8 +1336,6 @@ namespace RemCom
 				&pi                // receives information about new process
 			);
 
-
-
 			// End impersonation of client.
 			ShowLastError();
 			RevertToSelf();
@@ -1344,7 +1382,7 @@ namespace RemCom
 			//  LPVOID    lpvEnv;
 			PROCESS_INFORMATION pi = { 0 };
 			STARTUPINFOW         si = { 0 };
-			//	TCHAR szUserProfile[SIZEOF_BUFFER] = _T("");
+			//	TCHAR szUserProfile[SIZEOF_BUFFER] = "";
 
 				// Initialize the STARTUPINFO structure.
 				// Specify that the process runs in the interactive desktop.
@@ -1379,7 +1417,9 @@ namespace RemCom
 				LOGON_WITH_PROFILE,
 				NULL,
 				(LPWSTR)m_lpszCommandExe,
-				CREATE_UNICODE_ENVIRONMENT, 		/*lpvEnv*/ NULL, (LPCWSTR) "%SYSTEMROOT%\\system32",
+				CREATE_UNICODE_ENVIRONMENT,
+				/*lpvEnv*/ NULL,
+				(LPCWSTR) SYSTEM32,
 				&si,
 				&pi
 			);
@@ -1392,10 +1432,8 @@ namespace RemCom
 			CloseHandle(pi.hProcess);
 			CloseHandle(pi.hThread);
 
-
 			return bResult;
 		}
-
 
 		BOOL AddAceToWindowStation(HWINSTA hwinsta, PSID psid)
 		{
@@ -1555,8 +1593,7 @@ namespace RemCom
 				pace->Header.AceType = ACCESS_ALLOWED_ACE_TYPE;
 				pace->Header.AceFlags = CONTAINER_INHERIT_ACE |
 					INHERIT_ONLY_ACE | OBJECT_INHERIT_ACE;
-				pace->Header.AceSize = sizeof(ACCESS_ALLOWED_ACE) +
-					GetLengthSid(psid) - sizeof(DWORD);
+				pace->Header.AceSize = (WORD)(sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(psid) - sizeof(DWORD));
 				pace->Mask = GENERIC_ACCESS;
 
 				if (!CopySid(GetLengthSid(psid), &pace->SidStart, psid))
@@ -1817,9 +1854,9 @@ namespace RemCom
 			return bSuccess;
 		}
 
-		// xecutes a local process under the local user account who launched the process
-		BOOL StartLocalProcess(LPTSTR szCommandName) {
-
+		// executes a local process under the local user account who launched the process
+		BOOL StartLocalProcess(LPTSTR szCommandName)
+		{
 			SECURITY_ATTRIBUTES secAttrib;
 			ZeroMemory(&secAttrib, sizeof(secAttrib));
 			secAttrib.nLength = sizeof(secAttrib);
@@ -1852,7 +1889,8 @@ namespace RemCom
 				ShowLastError();
 				return false;
 			}
-			else {
+			else
+			{
 				//	printf("CreateProcess Success (%d).\n", GetLastError());
 			}
 			// Wait until child process exits.
@@ -1864,8 +1902,8 @@ namespace RemCom
 			return true;
 		}
 
-		BOOL StartLocalProcessAsUser() {
-
+		BOOL StartLocalProcessAsUser()
+		{
 			HANDLE	hToken;
 			PSID pSid = NULL;
 
@@ -1889,24 +1927,25 @@ namespace RemCom
 
 			if (!LogonUser((LPTSTR)m_lpszUser, (LPTSTR)m_lpszDomain, (LPTSTR)m_lpszPassword, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &hToken))
 			{
-				printf("User Logon failed (%d).\n", GetLastError());
+				cout << "User Logon failed (" << GetLastError() << "." << endl;
 				//goto Cleanup;
 				ShowLastError();
 				return false;
 			}
 
-			if (!GetLogonSID(hToken, &pSid)) {
+			if (!GetLogonSID(hToken, &pSid))
+			{
 				ShowLastError();
 				return false;
 			}
 
 			// Impersonate client to ensure access to executable file.
 
-			if (!ImpersonateLoggedOnUser(hToken)) {
+			if (!ImpersonateLoggedOnUser(hToken))
+			{
 				ShowLastError();
 				return false;
 			}
-
 
 			// Start the child process. 
 			if (!CreateProcessAsUser(
@@ -1923,14 +1962,14 @@ namespace RemCom
 				&pi)           // Pointer to PROCESS_INFORMATION structure
 				)
 			{
-				printf("CreateProcess failed (%d).\n", GetLastError());
+				cout << "CreateProcess failed (" << GetLastError() << ")." << endl;
 				ShowLastError();
-				printf("User %s Password %s Command %s  ", m_lpszUser, m_lpszPassword, szCmdline);
+				cout << "User " << m_lpszUser << " Password " << m_lpszPassword << " Command " << szCmdline << flush;
 				return false;
 			}
-			else {
-
-				printf("User Impersonation Success");
+			else
+			{
+				cout << "User Impersonation Success" << flush;
 			}
 
 			// Wait until child process exits.
@@ -1943,199 +1982,153 @@ namespace RemCom
 			return true;
 		}
 
-	public:
-		int Run()
+		BOOL IsLocalMachine()
 		{
-			int   rc = 0;
-			DWORD dwTemp = SIZEOF_BUFFER;
-			DWORD dwIndex = 0;
+			if (_tcsnicmp(m_lpszMachine, LOCALHOST, 16) == 0)
+				return true;
+			if (_tcsnicmp(m_lpszMachine, LOOPBACKIP, 16) == 0)
+				return true;
+			if (_tcsnicmp(m_lpszMachine, ".", 2) == 0) 
+				return true;
+			return false;
+		}
 
-			m_lpszMachine = GetRemoteMachineName();
+		void Cleanup()
+		{
+			// Disconnect from remote machine
+			EstablishConnection(m_lpszMachine, "IPC$", FALSE);
+			EstablishConnection(m_lpszMachine, "ADMIN$", FALSE);
+		}
 
-			m_lpszCommandExe = GetNthParameter(2, dwIndex);
-
-			GetRemoteCommandArguments(m_strArguments);
-
-			ShowCopyRight();
-
-			// Show help, if parameters are incorrect, or /?,/h,/help
-			if (IsCmdLineParameter(_T("h")) ||
-				IsCmdLineParameter(_T("?")) ||
-				IsCmdLineParameter(_T("help")) ||
-				m_lpszCommandExe == NULL ||
-				m_lpszMachine == NULL)
+		void RunOnLocalMachine()
+		{
+			if (IsLaunchedFromAdmin())
 			{
-				ShowUsage();
-				return -1;
+				cout << "Local Admin\n\n" << flush;
+			}
+			cout << "Localhost entered for Target Machine .. Going to RunAs Command\n\n" << flush;
+			m_lpszMachine = "\\\\127.0.0.1";
+
+			if (ExtractLocalBinaryResource())
+			{
+				cout << "Launching Local Process ...\n" << flush;
+				string strExeCmdAsUser = m_strLocalBinPath + " " + m_lpszUser + " " + m_lpszPassword + " " + m_lpszCommandExe;
+
+				/*		printf("lpszUser is %s \n",lpszUser);
+				printf("lpszPassword is %s \n",lpszPassword);
+				printf("lpszCommandExe is %s \n",lpszCommandExe);
+				printf("szExeCmdAsUser is %s \n",szExeCmdAsUser);
+				*/
+				if (!StartLocalProcess(const_cast<LPSTR>(strExeCmdAsUser.c_str())))
+				{
+					cout << "Create Local Process Failed. Illegal Command" << flush;
+				}
+				DeleteFile(m_strLocalBinPath.c_str());
+			}
+			else
+			{
+				cout << "Cannot Extract Local Resources. Please check write access to local tmp filesystem\n" << flush;
+				cout << "Create Process as User Failed. Trying to run the process with the current user\n\n" << flush;
+				StartLocalProcess((LPTSTR)m_lpszCommandExe); // Creates a Run As Command	 
 			}
 
+			//	if(! StartInteractiveClientProcess((LPTSTR)lpszUser, (LPTSTR)lpszDomain, (LPTSTR)lpszPassword, (LPTSTR)lpszCommandExe))
+			//		if(!StartProcessWithUserLogon())		{		}
+			//	StartLocalProcessAsUser(); 
+		}
 
-			// Initialize console's title
-			m_strConsoleTitle = m_lpszMachine;
-			m_strConsoleTitle += " : Starting Connection to: ";
-			SetConsoleTitle(m_strConsoleTitle.c_str());
-
-			// Sets our Ctrl handler
-			SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
-
-			// Gets our computer's name
-			TCHAR lpszThisMachine[SIZEOF_BUFFER];
-			if (!GetComputerName(lpszThisMachine, &dwTemp))
-			{
-				Out(_T("GetComputerName() failed. Use a valid name! :)\n"));
-				return -3;
-			}
-			m_strThisMachine = lpszThisMachine;
-
-			// Check the user/pwd from command line, and prompts
-			// for the password if needed
-			if (!SetConnectionCredentials(FALSE))
+		int RunOnRemoteMachine()
+		{
+			cout << "Initiating Connection to Remote Service...  " << flush;
+			int rc = 0;
+			// Connect to remote machine's ADMIN$
+			if (!EstablishConnection(m_lpszMachine, "ADMIN$", TRUE))
 			{
 				rc = -2;
-				goto cleanup;
+				cout << "Failed\n\n" << flush;
+				cerr << "Couldn't connect to " << m_lpszMachine << "\\ADMIN$\n";
+				ShowLastError();
+				return rc;
 			}
 
-			// If the Remote Machine is localhost or 127.0.0.1 or '.' Do not connect to the ADMIN$ or IPC$
-			// Instead try to use the credentials provided to RUNAS command
-			if ((_tcsnicmp(m_lpszMachine, m_lpszLocalMachine, 16) == 0) || (_tcsnicmp(m_lpszMachine, m_lpszLocalIP, 16) == 0) || (_tcsnicmp(m_lpszMachine, ".", 2) == 0))
+			// Connect to remote machine IPC$
+			if (!EstablishConnection(m_lpszMachine, "IPC$", TRUE))
 			{
-				if (IsLaunchedFromAdmin()) {
-					Out(_T("Local Admin\n\n"));
-				}
-				Out(_T("Localhost entered for Target Machine .. Going to RunAs Command\n\n"));
-				m_lpszMachine = "\\\\127.0.0.1";
-
-				if (ExtractLocalBinaryResource()) {
-					Out(_T("Launching Local Process ...\n"));
-					TCHAR szExeCmdAsUser[MAX_PATH] = _T("");
-					sprintf_s(szExeCmdAsUser, _T("%s %s %s %s"), m_strLocalBinPath.c_str(), m_lpszUser, m_lpszPassword, m_lpszCommandExe);
-
-					/*		printf("lpszUser is %s \n",lpszUser);
-					printf("lpszPassword is %s \n",lpszPassword);
-					printf("lpszCommandExe is %s \n",lpszCommandExe);
-					printf("szExeCmdAsUser is %s \n",szExeCmdAsUser);
-					*/
-					if (!StartLocalProcess(szExeCmdAsUser)) {
-						Out(_T("Create Local Process Failed. Illegal Command"));
-					}
-					DeleteFile(m_strLocalBinPath.c_str());
-				}
-				else {
-					Out(_T("Cannot Extract Local Resources. Please check write access to local tmp filesystem\n"));
-
-					Out(_T("Create Process as User Failed. Trying to run the process with the current user\n\n"));
-					StartLocalProcess((LPTSTR)m_lpszCommandExe); // Creates a Run As Command	 
-				}
-
-				//	if(! StartInteractiveClientProcess((LPTSTR)lpszUser, (LPTSTR)lpszDomain, (LPTSTR)lpszPassword, (LPTSTR)lpszCommandExe))
-				//		if(!StartProcessWithUserLogon())		{		}
-				//	StartLocalProcessAsUser(); 
-
+				rc = -2;
+				cout << "Failed\n\n" << flush;
+				cerr << "Couldn't connect to " << m_lpszMachine << "\\IPC$\n";
+				ShowLastError();
+				return rc;
 			}
 
-			else
-				//Remote Machine
+			// Copy the command's exe file to remote machine (if using /c)
+			if (!CopyBinaryToRemoteSystem())
 			{
-				Out(_T("Initiating Connection to Remote Service . . .  "));
-				// Connect to remote machine's ADMIN$
-				if (!EstablishConnection(m_lpszMachine, _T("ADMIN$"), TRUE))
-				{
-					rc = -2;
-					Out(_T("Failed\n\n"));
-					Error(_T("Couldn't connect to "))
-						Error(m_lpszMachine);
-					Error(_T("\\ADMIN$\n"));
-					ShowLastError();
-					goto cleanup;
-				}
-
-				// Connect to remote machine IPC$
-				if (!EstablishConnection(m_lpszMachine, _T("IPC$"), TRUE))
-				{
-					rc = -2;
-					Out(_T("Failed\n\n"));
-					Error(_T("Couldn't connect to "))
-						Error(m_lpszMachine);
-					Error(_T("\\IPC$\n"));
-					ShowLastError();
-					goto cleanup;
-				}
-
-
-				// Copy the command's exe file to remote machine (if using /c)
-				if (!CopyBinaryToRemoteSystem())
-				{
-					rc = -2;
-					Out(_T("Failed\n\n"));
-					Error(_T("Couldn't copy "));
-					Error(m_lpszCommandExe);
-					Error(_T(" to "));
-					Error(m_lpszMachine);
-					Error(_T("\\ADMIN$\\System32\n"));
-					ShowLastError();
-					goto cleanup;
-				}
-
-				// Connects to remote service, maybe it's already running :)
-				if (!ConnectToRemoteService(1, 0))
-				{
-					//We couldn't connect, so let's install it and start it
-
-					// Copy the service executable to \\remote\ADMIN$\System32
-					if (!CopyServiceToRemoteMachine())
-					{
-						rc = -2;
-						Out(_T("Failed\n\n"));
-						Error(_T("Couldn't copy service to "));
-						Error(m_lpszMachine);
-						Error(_T("\\ADMIN$\\System32\n"));
-						ShowLastError();
-						goto cleanup;
-					}
-
-					// Install and start service on remote machine
-					if (!InstallAndStartRemoteService())
-					{
-						rc = -2;
-						Out(_T("Failed\n\n"));
-						Error(_T("Couldn't start remote service\n"));
-						ShowLastError();
-						goto cleanup;
-					}
-
-					// Try to connect again
-					if (!ConnectToRemoteService(5, 1000))
-					{
-						rc = -2;
-						Out(_T("Failed\n\n"));
-						Error(_T("Couldn't connect to remote service\n"));
-						ShowLastError();
-						goto cleanup;
-					}
-				}
-
-				// Send the message to remote service to start the remote process
-				ExecuteRemoteCommand();
-
+				rc = -2;
+				cout << "Failed\n\n" << flush;
+				cerr << "Couldn't copy " << m_lpszCommandExe << " to " << m_lpszMachine << "\\ADMIN$\\System32\n";
+				ShowLastError();
+				return rc;
 			}
 
-		cleanup:
+			// Connects to remote service, maybe it's already running :)
+			if (!ConnectToRemoteService(1, 0))
+			{
+				//We couldn't connect, so let's install it and start it
 
-			// Disconnect from remote machine
-			EstablishConnection(m_lpszMachine, _T("IPC$"), FALSE);
-			EstablishConnection(m_lpszMachine, _T("ADMIN$"), FALSE);
+				// Copy the service executable to \\remote\ADMIN$\System32
+				if (!CopyServiceToRemoteMachine())
+				{
+					rc = -2;
+					cout << "Failed\n\n" << flush;
+					cerr << "Couldn't copy service to " << m_lpszMachine << "\\ADMIN$\\System32\n";
+					ShowLastError();
+					return rc;
+				}
+
+				// Install and start service on remote machine
+				if (!InstallAndStartRemoteService())
+				{
+					rc = -2;
+					cout << "Failed\n\n" << flush;
+					cerr << "Couldn't start remote service\n";
+					ShowLastError();
+					return rc;
+				}
+
+				// Try to connect again
+				if (!ConnectToRemoteService(5, 1000))
+				{
+					rc = -2;
+					cout << "Failed\n\n" << flush;
+					cerr << "Couldn't connect to remote service\n";
+					ShowLastError();
+					return rc;
+				}
+			}
+
+			// Send the message to remote service to start the remote process
+			ExecuteRemoteCommand();
 
 			return rc;
 		}
 	};
 
 	RemCom* RemCom::s_Instance;
-
 }
 
 // Main function
 int _tmain(DWORD, TCHAR**, TCHAR**)
 {
-	RemCom::RemCom remcom = RemCom::RemCom();
-	return remcom.Run();
+	try
+	{
+		RemCom::RemCom remcom = RemCom::RemCom();
+		return remcom.Run();
+	}
+	catch(...)
+	{
+		std::cerr << "Uncaught error occurred, press Enter to continue";
+		std::string strInput;
+		std::cin >> strInput;
+	}
 }
