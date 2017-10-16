@@ -40,6 +40,7 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
+  <ImportGroup Label="Shared" />
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Template|Win32'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
@@ -149,7 +150,6 @@
     <ClCompile Include="RemCom.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="RemCom.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
@@ -157,6 +157,9 @@
     <CustomBuild Include="RemComSvc\Release\RemComSvc.exe" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="RemComCommon\RemComCommon.vcxproj">
+      <Project>{c6c7f424-fafb-4cf1-965b-2c0613b89507}</Project>
+    </ProjectReference>
     <ProjectReference Include="RemComSvc\RemComSvc.vcxproj">
       <Project>{2f761051-519b-4831-b997-153fe27418da}</Project>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>

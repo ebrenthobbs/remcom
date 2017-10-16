@@ -4,7 +4,7 @@
     <ShowAllFiles>false</ShowAllFiles>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <LocalDebuggerCommandArguments>\\b-300769-w10 /user:corporate\brehobbs /pwd:S0forth! "osql -S .\SQLEXPRESS -U RemoteUser -P pickles -w1000 -Q \"use UserManagement; select top 100 * from FMHDashboardUser u join UserOrgAssociation uo on uo.UserId = u.Id join UserRoleUserAssociation ur on ur.UserId = u.Id join UserRole r on r.Id = ur.RoleId\""</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>\\b-300769-w10 /user:corporate\brehobbs /pwd:S0forth! "osql -S .\SQLEXPRESS -U RemoteUser -P pickles -w1000 -Q \"use UserManagement; select top 1 * from FMHDashboardUser u join UserOrgAssociation uo on uo.UserId = u.Id join UserRoleUserAssociation ur on ur.UserId = u.Id join UserRole r on r.Id = ur.RoleId\""</LocalDebuggerCommandArguments>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">

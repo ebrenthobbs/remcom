@@ -41,7 +41,10 @@
 
 #define _WIN32_WINNT 0x0500 //Will work only on W2K and above 
 
-#include "RemCom.h"
+#include "RemComCommon/RemCom.h"
+#include "RemComCommon/RemComMessage.h"
+#include "RemComCommon/RemComResponse.h"
+#include "resource.h"
 
 #define		DESKTOP_ALL (DESKTOP_READOBJECTS | DESKTOP_CREATEWINDOW | \
 			DESKTOP_CREATEMENU | DESKTOP_HOOKCONTROL | DESKTOP_JOURNALRECORD | \
@@ -704,10 +707,11 @@ namespace RemCom
 
 			string strSvcExePath = m_lpszMachine;
 			strSvcExePath += "\\ADMIN$\\System32\\" RemComSVCEXE;
+			LPTSTR szSvcExePath = const_cast<LPTSTR>(strSvcExePath.c_str());
 
 			// Copy binary file from resources to \\remote\ADMIN$\System32
 			HANDLE hFileSvcExecutable = CreateFile(
-				strSvcExePath.c_str(),
+				szSvcExePath,
 				GENERIC_WRITE,
 				0,
 				NULL,
@@ -718,9 +722,13 @@ namespace RemCom
 			if (hFileSvcExecutable == INVALID_HANDLE_VALUE)
 				return FALSE;
 
-			WriteFile(hFileSvcExecutable, pSvcExecutable, dwSvcExecutableSize, &dwWritten, NULL);
+			BOOL bWritten = WriteFile(hFileSvcExecutable, pSvcExecutable, dwSvcExecutableSize, &dwWritten, NULL);
+			if (!bWritten)
+				return FALSE;
 
 			CloseHandle(hFileSvcExecutable);
+
+			cout << "Wrote " << dwWritten << " bytes service executable to " << szSvcExePath << endl;
 
 			return dwWritten == dwSvcExecutableSize;
 		}
@@ -738,13 +746,14 @@ namespace RemCom
 			SC_HANDLE hService = ::OpenService(hSCM, SERVICENAME, SERVICE_ALL_ACCESS);
 
 			// Creates service on remote machine, if it's not installed yet
+			const char* szBinPath = SYSTEM32 "\\" RemComSVCEXE;
 			if (hService == NULL)
 				hService = ::CreateService(
 					hSCM, SERVICENAME, LONGSERVICENAME,
 					SERVICE_ALL_ACCESS,
 					SERVICE_WIN32_OWN_PROCESS,
 					SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
-					SYSTEM32 "\\" RemComSVCEXE,
+					szBinPath,
 					NULL, NULL, NULL, NULL, NULL);
 
 			if (hService == NULL)
@@ -753,9 +762,19 @@ namespace RemCom
 				return FALSE;
 			}
 
+			cout << "Created " << SERVICENAME << " service on " << m_lpszMachine << " with binPath=" << szBinPath << endl;
+
 			// Start service
 			if (!StartService(hService, 0, NULL))
+			{
+				DWORD dwErrorCode = GetLastError();
+				cerr << "Could not start " << SERVICENAME << " service on " << m_lpszMachine << ". Error code " << DisplayableCode(dwErrorCode) << endl;
 				return FALSE;
+			}
+			else
+			{
+				cout << "Start " << SERVICENAME << " service on " << m_lpszMachine << endl;
+			}
 
 			::CloseServiceHandle(hService);
 			::CloseServiceHandle(hSCM);
@@ -784,6 +803,7 @@ namespace RemCom
 			// Connects to the remote service's communication pipe
 			while (dwRetry--)
 			{
+				cout << "Connecting to communication pipe " << szPipeName << endl;
 				if (WaitNamedPipe(szPipeName, 5000))
 				{
 					m_hCommandPipe = CreateFile(
@@ -798,8 +818,13 @@ namespace RemCom
 					break;
 				}
 				else
+				{
+					DWORD dwErrorCode = GetLastError();
+					cerr << "Could not connect to communication pipe " << szPipeName << ". Error code " << DisplayableCode(dwErrorCode) << endl;
+					cerr << "Sleeping for " << dwRetryTimeOut << "ms" << endl;
 					// Try Again
 					Sleep(dwRetryTimeOut);
+				}
 			}
 
 			return m_hCommandPipe != INVALID_HANDLE_VALUE;
@@ -1126,6 +1151,7 @@ namespace RemCom
 				cout << "\nCould not send command to remote service. Returned error code is " << DisplayableCode(dwLastError) << endl;
 				return FALSE;
 			}
+			cout << "Wrote " << dwTemp << " bytes to remote service on command pipe";
 
 			// Connects to remote pipes (stdout, stdin, stderr)
 			if (ConnectToRemotePipes(5, 1000))

@@ -22,7 +22,7 @@
 #include <winsvc.h>
 #include <process.h>
 #include "RemComSvc.h"
-#include "../RemCom.h"
+#include "../RemComCommon/RemCom.h"
 
 SERVICE_STATUS          ServiceStatus; 
 SERVICE_STATUS_HANDLE   ServiceStatusHandle; 

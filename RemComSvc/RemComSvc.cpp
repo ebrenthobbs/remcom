@@ -34,7 +34,9 @@
 #include <process.h>
 #include <fstream>
 #include "RemComSvc.h"
-#include "../RemCom.h"
+#include "../RemComCommon/RemCom.h"
+#include "../RemComCommon/RemComMessage.h"
+#include "../RemComCommon/RemComResponse.h"
 
 namespace RemCom
 {
@@ -63,6 +65,8 @@ namespace RemCom
 		// Communication Thread Pool, handles the incoming RemCom.exe requests
 		void CommunicationPoolThread()
 		{
+			WriteEventLog("Starting communication pool thread");
+
 			for (;;)
 			{
 				SECURITY_ATTRIBUTES SecAttrib = { 0 };
@@ -142,50 +146,64 @@ namespace RemCom
 
 		void CommunicationPipeThreadProc()
 		{
-			RemComMessage msg;
-			RemComResponse response;
-
-			DWORD dwWritten;
-			DWORD dwRead;
+			WriteEventLog("Starting communication pipe thread");
 
 			// Increment instance counter 
 			InterlockedIncrement(&dwSvcPipeInstanceCount);
 
-			::ZeroMemory(&response, sizeof(response));
-
-			// Waiting for communication message from client
-			if (!ReadFile(m_hCommPipe, &msg, sizeof(msg), &dwRead, NULL) || dwRead == 0)
-			{
-				WriteLastError(_T("Could not read message from client. Error was "));
-				goto cleanup;
-			}
-			else
-			{
-				WriteEventLog(string(msg.szCommand));
-			}
-
-			// Execute the requested command
-			response.dwErrorCode = Execute(&msg, &response.dwReturnCode);
-
-			// Send back the response message (client is waiting for this response)
-			if (!WriteFile(m_hCommPipe, &response, sizeof(response), &dwWritten, NULL) || dwWritten == 0)
-			{
-				WriteLastError(_T("Could not write response to client. Error was "));
-				goto cleanup;
-			}
-
-		cleanup:
+			WaitForMessageThenProcess();
 
 			DisconnectNamedPipe(m_hCommPipe);
 			CloseHandle(m_hCommPipe);
 
 			// Decrement instance counter 
 			InterlockedDecrement(&dwSvcPipeInstanceCount);
+		}
 
-			// If this was the last client, let's stop ourself
-			if (dwSvcPipeInstanceCount == 0)
-				SetEvent(hStopServiceEvent);
+		void WaitForMessageThenProcess()
+		{
+			RemComMessage msg;
+			WaitForMessageFromClient(msg);
 
+			RemComResponse response;
+			ProcessMessage(msg, response);
+
+			WriteEventLog("Command execution finished");
+		}
+
+		void WaitForMessageFromClient(RemCom::RemComMessage &msg)
+		{
+			// Waiting for communication message from client
+			stringstream strMessage;
+			strMessage << "Reading fixed size command of " << sizeof(msg) << " bytes from client";
+			WriteEventLog(strMessage.str());
+
+			DWORD dwRead;
+			if (!ReadFile(m_hCommPipe, &msg, sizeof(msg), &dwRead, NULL) || dwRead == 0)
+			{
+				WriteLastError(_T("Could not read message from client. Error was "));
+				return;
+			}
+
+			WriteEventLog(string(msg.szCommand));
+		}
+
+		void ProcessMessage(RemComMessage& msg, RemComResponse& response)
+		{
+			// Execute the requested command
+			response.dwErrorCode = Execute(&msg, &response.dwReturnCode);
+
+			// Send back the response message (client is waiting for this response)
+			DWORD dwWritten;
+			if (!WriteFile(m_hCommPipe, &response, sizeof(response), &dwWritten, NULL) || dwWritten == 0)
+			{
+				WriteLastError(_T("Could not write response to client. Error was "));
+				return;
+			}
+
+			stringstream strMessage;
+			strMessage << "Wrote " << dwWritten << "response bytes to client";
+			WriteEventLog(strMessage.str());
 		}
 
 		const string CreatePipeName(LPCTSTR szBaseName, RemComMessage* pMsg)
