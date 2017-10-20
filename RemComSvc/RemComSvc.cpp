@@ -35,6 +35,7 @@
 #include <fstream>
 #include "RemComSvc.h"
 #include "../RemCom.h"
+#include "../RemComMessage.h"
 
 namespace RemCom
 {
@@ -63,8 +64,11 @@ namespace RemCom
 		// Communication Thread Pool, handles the incoming RemCom.exe requests
 		void CommunicationPoolThread()
 		{
+			WriteEventLog("Starting communication pool thread");
+			LPTSTR szCommPipeName = "\\\\.\\pipe\\" RemComCOMM;
 			for (;;)
 			{
+				WriteEventLog("Creating communication pipe " "\\\\.\\pipe\\" RemComCOMM);
 				SECURITY_ATTRIBUTES SecAttrib = { 0 };
 				SECURITY_DESCRIPTOR SecDesc;
 
@@ -77,7 +81,7 @@ namespace RemCom
 
 				// Create communication pipe
 				m_hCommPipe = CreateNamedPipe(
-					"\\\\.\\pipe\\" RemComCOMM,
+					szCommPipeName,
 					PIPE_ACCESS_DUPLEX,
 					PIPE_TYPE_MESSAGE | PIPE_WAIT,
 					PIPE_UNLIMITED_INSTANCES,
@@ -101,7 +105,15 @@ namespace RemCom
 			return szCodeDisplayBuffer;
 		}
 
-		void WriteEventLog(string strMessage)
+		template <typename Functor>
+		void WriteEventLogStream(Functor &lambda)
+		{
+			stringstream strMessage;
+			lambda(strMessage);
+			WriteEventLog(strMessage.str());
+		}
+
+		void WriteEventLog(const std::string &strMessage)
 		{
 			//TCHAR szTempPathBuf[MAX_PATH];
 			//GetTempPath(MAX_PATH, szTempPathBuf);
@@ -146,7 +158,6 @@ namespace RemCom
 			RemComResponse response;
 
 			DWORD dwWritten;
-			DWORD dwRead;
 
 			// Increment instance counter 
 			InterlockedIncrement(&dwSvcPipeInstanceCount);
@@ -154,18 +165,21 @@ namespace RemCom
 			::ZeroMemory(&response, sizeof(response));
 
 			// Waiting for communication message from client
-			if (!ReadFile(m_hCommPipe, &msg, sizeof(msg), &dwRead, NULL) || dwRead == 0)
+			WriteEventLog("Waiting for client message");
+			if (!msg.receive(m_hCommPipe))
 			{
 				WriteLastError(_T("Could not read message from client. Error was "));
 				goto cleanup;
 			}
 			else
 			{
-				WriteEventLog(string(msg.szCommand));
+				string command;
+				WriteEventLog(msg.getCommand(command));
 			}
 
 			// Execute the requested command
 			response.dwErrorCode = Execute(&msg, &response.dwReturnCode);
+			WriteEventLogStream([](stringstream& str) {str << "Returned from Execute, writing " << sizeof(response) << " response bytes"; });
 
 			// Send back the response message (client is waiting for this response)
 			if (!WriteFile(m_hCommPipe, &response, sizeof(response), &dwWritten, NULL) || dwWritten == 0)
@@ -173,9 +187,15 @@ namespace RemCom
 				WriteLastError(_T("Could not write response to client. Error was "));
 				goto cleanup;
 			}
+			else
+			{
+				stringstream strMessage;
+				strMessage << "Wrote response to client. dwErrorCode=" << response.dwErrorCode << ", dwReturnCode=" << response.dwReturnCode;
+				WriteEventLog(strMessage.str());
+			}
 
 		cleanup:
-
+			WriteEventLog("Cleaning up and shutting down");
 			DisconnectNamedPipe(m_hCommPipe);
 			CloseHandle(m_hCommPipe);
 
@@ -186,13 +206,6 @@ namespace RemCom
 			if (dwSvcPipeInstanceCount == 0)
 				SetEvent(hStopServiceEvent);
 
-		}
-
-		const string CreatePipeName(LPCTSTR szBaseName, RemComMessage* pMsg)
-		{
-			stringstream strPipeName;
-			strPipeName << "\\\\.\\pipe\\" << szBaseName << pMsg->szMachine << pMsg->dwProcessId;
-			return strPipeName.str();
 		}
 
 		// Creates named pipes for stdout, stderr, stdin
@@ -213,11 +226,12 @@ namespace RemCom
 			psi->hStdInput = INVALID_HANDLE_VALUE;
 			psi->hStdError = INVALID_HANDLE_VALUE;
 
-			const string strStdOut = CreatePipeName(RemComSTDOUT, pMsg);
+			string strStdOut, strStdIn, strStdErr;
+			pMsg->createPipeName(RemComSTDOUT, strStdOut);
+			pMsg->createPipeName(RemComSTDIN, strStdIn);
+			pMsg->createPipeName(RemComSTDERR, strStdErr);
 			const char* szStdOut = strStdOut.c_str();
-			const string strStdIn = CreatePipeName(RemComSTDIN, pMsg);
 			const char* szStdIn = strStdIn.c_str();
-			const string strStdErr = CreatePipeName(RemComSTDERR, pMsg);
 			const char* szStdErr = strStdErr.c_str();
 
 			stringstream strMessage;
@@ -312,7 +326,8 @@ namespace RemCom
 			// Initializes command
 			// cmd.exe /c /q allows us to execute internal dos commands too.
 			stringstream strCommand;
-			strCommand << "cmd.exe /q /c \"" << pMsg->szCommand << "\"";
+			string command;
+			strCommand << "cmd.exe /q /c \"" << pMsg->getCommand(command) << "\"";
 			const string tmpCommand = strCommand.str();
 			LPTSTR szCommand = const_cast<LPTSTR>(tmpCommand.c_str());
 
@@ -323,9 +338,9 @@ namespace RemCom
 				NULL,
 				NULL,
 				TRUE,
-				pMsg->dwPriority | CREATE_NO_WINDOW,
+				pMsg->getPriority() | CREATE_NO_WINDOW,
 				NULL,
-				pMsg->szWorkingDir[0] != _T('\0') ? pMsg->szWorkingDir : NULL,
+				pMsg->getWorkingDirectory(),
 				&si,
 				&pi))
 			{
@@ -334,14 +349,25 @@ namespace RemCom
 				*pReturnCode = 0;
 
 				// Waiting for process to terminate
-				if (!pMsg->bNoWait)
+				if (pMsg->shouldWait())
 				{
+					WriteEventLog("Waiting for process to terminate");
 					WaitForSingleObject(hProcess, INFINITE);
+					WriteEventLog("Process terminated");
 					GetExitCodeProcess(hProcess, pReturnCode);
+					stringstream stdMessage;
+					stdMessage << "Exit code = " << *pReturnCode;
+					WriteEventLog(stdMessage.str());
+				}
+				else
+				{
+					WriteEventLog("NOT waiting for process to terminate");
 				}
 			}
 			else
+			{
 				rc = 1;
+			}
 
 			return rc;
 		}

@@ -14,6 +14,9 @@
     <ClCompile Include="RemCom.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="RemComMessage.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="RemCom.h">
@@ -22,6 +25,7 @@
     <ClInclude Include="resource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="RemComMessage.h" />
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="ProcComs\Release\ProcComs.bin" />

@@ -147,9 +147,11 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="RemCom.cpp" />
+    <ClCompile Include="RemComMessage.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="RemCom.h" />
+    <ClInclude Include="RemComMessage.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>

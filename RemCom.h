@@ -39,6 +39,7 @@
 #include <thread>
 #include <iostream>
 #include <sstream>
+#include <cstdarg>
 #include <userenv.h>
 #include "ProcFunctions.h"
 //#include <strsafe.h>
@@ -59,17 +60,6 @@
 #define SYSTEM32 SYSTEMROOT "\\system32"
 #define LOCALHOST "\\\\localhost"
 #define LOOPBACKIP "\\\\127.0.0.1"
-
-class RemComMessage
-{
-public:
-   TCHAR szCommand[0x1000];
-   TCHAR szWorkingDir[_MAX_PATH];
-   DWORD dwPriority;
-   DWORD dwProcessId;
-   TCHAR szMachine[_MAX_PATH];
-   BOOL  bNoWait;    
-};
 
 class RemComResponse
 {

@@ -42,6 +42,7 @@
 #define _WIN32_WINNT 0x0500 //Will work only on W2K and above 
 
 #include "RemCom.h"
+#include "RemComMessage.h"
 
 #define		DESKTOP_ALL (DESKTOP_READOBJECTS | DESKTOP_CREATEWINDOW | \
 			DESKTOP_CREATEMENU | DESKTOP_HOOKCONTROL | DESKTOP_JOURNALRECORD | \
@@ -66,13 +67,6 @@ namespace RemCom
 	class RemCom
 	{
 	public:
-		static RemCom* s_Instance;
-
-		RemCom()
-		{
-			s_Instance = this;
-		}
-
 		int Run()
 		{
 			int   rc = 0;
@@ -121,16 +115,7 @@ namespace RemCom
 				return rc;
 			}
 
-			// If running locally do not connect to the ADMIN$ or IPC$
-			// Instead try to use the credentials provided to RUNAS command
-			if (IsLocalMachine())
-			{
-				RunOnLocalMachine();
-			}
-			else
-			{
-				rc = RunOnRemoteMachine();
-			}
+			rc = RunOnRemoteMachine();
 
 			Cleanup();
 
@@ -256,33 +241,6 @@ namespace RemCom
 			CloseHandle(hToken);
 
 			return bIsAdmin;
-		}
-
-		bool IsLocalSystem()
-		{
-			bool bIsLocalSystem = false;
-			HANDLE htok = 0;
-
-			if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &htok))
-				ShowLastError();
-
-			BYTE userSid[256];
-
-			DWORD cb = sizeof userSid;
-
-			if (!GetTokenInformation(htok, TokenUser, userSid, cb, &cb))
-				ShowLastError();
-
-			TOKEN_USER* ptu = (TOKEN_USER*)userSid;
-
-			void* pLocalSystemSid = GetLocalSystemSid();
-
-			bIsLocalSystem = EqualSid(pLocalSystemSid, ptu->User.Sid) ? true : false;
-
-			FreeSid(pLocalSystemSid);
-			CloseHandle(htok);
-
-			return bIsLocalSystem;
 		}
 
 		VOID FreeLogonSID(PSID *ppsid)
@@ -813,12 +771,12 @@ namespace RemCom
 			const char* szArguments = m_strArguments.c_str();
 
 			// Info
-			pMsg->dwProcessId = GetCurrentProcessId();
-			strcpy_s(pMsg->szMachine, m_strThisMachine.c_str());
+			pMsg->setProcessId(GetCurrentProcessId());
+			pMsg->setMachine(m_strThisMachine.c_str());
 
 			// Cmd
 			if (!IsCmdLineParameter("c"))
-				_stprintf_s(pMsg->szCommand, "%s %s", m_lpszCommandExe, szArguments);
+				*pMsg << m_lpszCommandExe << " " << szArguments;
 			else
 			{
 				TCHAR drive[_MAX_DRIVE];
@@ -828,31 +786,33 @@ namespace RemCom
 
 				_splitpath_s(m_lpszCommandExe, drive, dir, fname, ext);
 
-				_stprintf_s(pMsg->szCommand, "%s%s %s", fname, ext, szArguments);
+				*pMsg << fname << ext << " " << szArguments;
 			}
 
 			// Priority
 			if (IsCmdLineParameter("realtime"))
-				pMsg->dwPriority = REALTIME_PRIORITY_CLASS;
+				pMsg->setPriority(REALTIME_PRIORITY_CLASS);
 			else
 				if (IsCmdLineParameter("high"))
-					pMsg->dwPriority = HIGH_PRIORITY_CLASS;
+					pMsg->setPriority(HIGH_PRIORITY_CLASS);
 				else
 					if (IsCmdLineParameter("idle"))
-						pMsg->dwPriority = IDLE_PRIORITY_CLASS;
+						pMsg->setPriority(IDLE_PRIORITY_CLASS);
 					else
-						pMsg->dwPriority = NORMAL_PRIORITY_CLASS; // default
+						pMsg->setPriority(NORMAL_PRIORITY_CLASS); // default
 
 			// No wait
-			pMsg->bNoWait = IsCmdLineParameter("nowait");
+			pMsg->setNoWait(IsCmdLineParameter("nowait"));
 
 			if (lpszWorkingDir != NULL)
-				strcpy_s(pMsg->szWorkingDir, lpszWorkingDir);
+				pMsg->setWorkingDirectory(lpszWorkingDir);
 
 			// Console Title
 			m_strConsoleTitle = m_lpszMachine;
 			m_strConsoleTitle += " : ";
-			m_strConsoleTitle += pMsg->szCommand;
+			string command;
+			pMsg->getCommand(command);
+			m_strConsoleTitle += command;
 			SetConsoleTitle(m_strConsoleTitle.c_str());
 
 			return TRUE;
@@ -860,9 +820,10 @@ namespace RemCom
 
 		// Listens the remote stdout pipe
 		// Remote process will send its stdout to this pipe
-		static void ListenRemoteOutPipeThread(void*)
+		static void ListenRemoteOutPipeThread(void* pThis)
 		{
-			s_Instance->ListenRemoteOutPipeThread();
+			RemCom* pInstance = (RemCom*)pThis;
+			pInstance->ListenRemoteOutPipeThread();
 		}
 
 		void ListenRemoteOutPipeThread()
@@ -923,14 +884,15 @@ namespace RemCom
 
 		// Listens the remote stderr pipe
 		// Remote process will send its stderr to this pipe
-		static void ListenRemoteErrorPipeThread(void*)
+		static void ListenRemoteErrorPipeThread(void* pThis)
 		{
-			s_Instance->ListenRemoteErrorPipeThread();
+			RemCom* pInstance = (RemCom*)pThis;
+			pInstance->ListenRemoteErrorPipeThread();
 		}
 
 		void ListenRemoteErrorPipeThread()
 		{
-			TCHAR szBuffer[SIZEOF_BUFFER];
+			TCHAR szBuffer[SIZEOF_BUFFER+1];
 			DWORD dwRead;
 
 			for (;;)
@@ -959,15 +921,16 @@ namespace RemCom
 		// Listens our console, and if the user types in something,
 		// we will pass it to the remote machine.
 		// ReadConsole return after pressing the ENTER
-		static void ListenRemoteStdInputPipeThread(void*)
+		static void ListenRemoteStdInputPipeThread(void* pThis)
 		{
-			s_Instance->ListenRemoteStdInputPipeThread();
+			RemCom* pInstance = (RemCom*)pThis;
+			pInstance->ListenRemoteStdInputPipeThread();
 		}
 
 		void ListenRemoteStdInputPipeThread()
 		{
 			HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
-			TCHAR szInputBuffer[SIZEOF_BUFFER] = "";
+			TCHAR szInputBuffer[SIZEOF_BUFFER+1] = "";
 			DWORD nBytesRead;
 			DWORD nBytesWrote;
 
@@ -997,16 +960,13 @@ namespace RemCom
 		void ListenToRemoteNamedPipes()
 		{
 			// StdOut
-			_beginthread(ListenRemoteOutPipeThread, 0, NULL);
-			//std::thread([=] { m_ListenRemoteOutPipeThread(); });
+			_beginthread(ListenRemoteOutPipeThread, 0, this);
 
 			// StdErr
-			_beginthread(ListenRemoteErrorPipeThread, 0, NULL);
-			//std::thread([=] { m_ListenRemoteOutPipeThread(); });
+			_beginthread(ListenRemoteErrorPipeThread, 0, this);
 
 			// StdIn
-			_beginthread(ListenRemoteStdInputPipeThread, 0, NULL);
-			//std::thread([=] { m_ListenRemoteStdInputPipeThread(); });
+			_beginthread(ListenRemoteStdInputPipeThread, 0, this);
 		}
 
 		const string CreateRemotePipeName(LPCSTR szPipeBaseName)
@@ -1113,14 +1073,13 @@ namespace RemCom
 			RemComMessage msg;
 			RemComResponse response;
 
-			::ZeroMemory(&msg, sizeof(msg));
 			::ZeroMemory(&response, sizeof(response));
 
 			BuildMessageStructure(&msg);
 
 			// Send message to service
-			BOOL bSuccess = WriteFile(m_hCommandPipe, &msg, sizeof(msg), &dwTemp, NULL);
-			if (!bSuccess)
+			cout << "Writing message to command pipe" << endl;
+			if (!msg.send(m_hCommandPipe))
 			{
 				DWORD dwLastError = GetLastError();
 				cout << "\nCould not send command to remote service. Returned error code is " << DisplayableCode(dwLastError) << endl;
@@ -1128,11 +1087,11 @@ namespace RemCom
 			}
 
 			// Connects to remote pipes (stdout, stdin, stderr)
+			cout << "Connecting to remote process pipes" << endl;
 			if (ConnectToRemotePipes(5, 1000))
 			{
-				cout << "Ok\n\n" << flush;
-
 				// Waiting for response from service
+				cout << "Waiting for " << sizeof(response) << " response bytes" << endl;
 				ReadFile(m_hCommandPipe, &response, sizeof(response), &dwTemp, NULL);
 			}
 			else
@@ -1982,17 +1941,6 @@ namespace RemCom
 			return true;
 		}
 
-		BOOL IsLocalMachine()
-		{
-			if (_tcsnicmp(m_lpszMachine, LOCALHOST, 16) == 0)
-				return true;
-			if (_tcsnicmp(m_lpszMachine, LOOPBACKIP, 16) == 0)
-				return true;
-			if (_tcsnicmp(m_lpszMachine, ".", 2) == 0) 
-				return true;
-			return false;
-		}
-
 		void Cleanup()
 		{
 			// Disconnect from remote machine
@@ -2000,46 +1948,9 @@ namespace RemCom
 			EstablishConnection(m_lpszMachine, "ADMIN$", FALSE);
 		}
 
-		void RunOnLocalMachine()
-		{
-			if (IsLaunchedFromAdmin())
-			{
-				cout << "Local Admin\n\n" << flush;
-			}
-			cout << "Localhost entered for Target Machine .. Going to RunAs Command\n\n" << flush;
-			m_lpszMachine = "\\\\127.0.0.1";
-
-			if (ExtractLocalBinaryResource())
-			{
-				cout << "Launching Local Process ...\n" << flush;
-				string strExeCmdAsUser = m_strLocalBinPath + " " + m_lpszUser + " " + m_lpszPassword + " " + m_lpszCommandExe;
-
-				/*		printf("lpszUser is %s \n",lpszUser);
-				printf("lpszPassword is %s \n",lpszPassword);
-				printf("lpszCommandExe is %s \n",lpszCommandExe);
-				printf("szExeCmdAsUser is %s \n",szExeCmdAsUser);
-				*/
-				if (!StartLocalProcess(const_cast<LPSTR>(strExeCmdAsUser.c_str())))
-				{
-					cout << "Create Local Process Failed. Illegal Command" << flush;
-				}
-				DeleteFile(m_strLocalBinPath.c_str());
-			}
-			else
-			{
-				cout << "Cannot Extract Local Resources. Please check write access to local tmp filesystem\n" << flush;
-				cout << "Create Process as User Failed. Trying to run the process with the current user\n\n" << flush;
-				StartLocalProcess((LPTSTR)m_lpszCommandExe); // Creates a Run As Command	 
-			}
-
-			//	if(! StartInteractiveClientProcess((LPTSTR)lpszUser, (LPTSTR)lpszDomain, (LPTSTR)lpszPassword, (LPTSTR)lpszCommandExe))
-			//		if(!StartProcessWithUserLogon())		{		}
-			//	StartLocalProcessAsUser(); 
-		}
-
 		int RunOnRemoteMachine()
 		{
-			cout << "Initiating Connection to Remote Service...  " << flush;
+			cout << "Initiating Connection to Remote Service...  " << endl;
 			int rc = 0;
 			// Connect to remote machine's ADMIN$
 			if (!EstablishConnection(m_lpszMachine, "ADMIN$", TRUE))
@@ -2113,8 +2024,6 @@ namespace RemCom
 			return rc;
 		}
 	};
-
-	RemCom* RemCom::s_Instance;
 }
 
 // Main function
