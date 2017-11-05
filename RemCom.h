@@ -40,6 +40,7 @@
 #include <iostream>
 #include <sstream>
 #include <cstdarg>
+#include <ctime>
 #include <userenv.h>
 #include "ProcFunctions.h"
 //#include <strsafe.h>

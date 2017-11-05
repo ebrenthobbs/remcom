@@ -37,6 +37,8 @@
 #include "../RemCom.h"
 #include "../RemComMessage.h"
 
+#define BUFSIZE 512
+
 namespace RemCom
 {
 	using namespace std;
@@ -44,16 +46,32 @@ namespace RemCom
 	class RemComSvc
 	{
 	public:
+		void SetDebugLogStream(ostream* debugLogStream)
+		{
+			m_debugLogStream = debugLogStream;
+		}
+
 		void StartCommunicationPoolThread()
 		{
 			// Start CommunicationPoolThread, which handles the incoming instances
 			_beginthread(RemCom::RemComSvc::CommunicationPoolThread, 0, this);
 		}
 
+		void WriteEventString(const std::string &strMessage)
+		{
+			string logFilePath = "C:/temp";
+			logFilePath += "/RemComSvc.log";
+			ofstream logStream;
+			logStream.open(logFilePath, ios_base::app);
+			logStream << strMessage.c_str();
+			logStream.close();
+		}
+
 	private:
 		HANDLE	m_hCommPipe = NULL;
-		LONG	dwSvcPipeInstanceCount = 0;
-		TCHAR	szCodeDisplayBuffer[40];
+		LONG	m_dwSvcPipeInstanceCount = 0;
+		TCHAR	m_szCodeDisplayBuffer[40];
+		ostream* m_debugLogStream;
 
 		static void CommunicationPoolThread(PVOID pThis)
 		{
@@ -83,14 +101,14 @@ namespace RemCom
 				m_hCommPipe = CreateNamedPipe(
 					szCommPipeName,
 					PIPE_ACCESS_DUPLEX,
-					PIPE_TYPE_MESSAGE | PIPE_WAIT,
+					PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
 					PIPE_UNLIMITED_INSTANCES,
+					BUFSIZE,
+					BUFSIZE,
 					0,
-					0,
-					(DWORD)-1,
 					&SecAttrib);
 
-				if (m_hCommPipe != NULL)
+				if (m_hCommPipe != INVALID_HANDLE_VALUE)
 				{
 					// Waiting for client to connect to this pipe
 					ConnectNamedPipe(m_hCommPipe, NULL);
@@ -101,8 +119,8 @@ namespace RemCom
 
 		LPCTSTR GetCodeDisplayString(DWORD dwCode)
 		{
-			_stprintf_s(szCodeDisplayBuffer, "%d(%08X)", dwCode, dwCode);
-			return szCodeDisplayBuffer;
+			_stprintf_s(m_szCodeDisplayBuffer, "%d(%08X)", dwCode, dwCode);
+			return m_szCodeDisplayBuffer;
 		}
 
 		template <typename Functor>
@@ -154,13 +172,13 @@ namespace RemCom
 
 		void CommunicationPipeThreadProc()
 		{
-			RemComMessage msg;
+			RemComMessage msg(BUFSIZ, m_debugLogStream);
 			RemComResponse response;
 
 			DWORD dwWritten;
 
 			// Increment instance counter 
-			InterlockedIncrement(&dwSvcPipeInstanceCount);
+			InterlockedIncrement(&m_dwSvcPipeInstanceCount);
 
 			::ZeroMemory(&response, sizeof(response));
 
@@ -200,10 +218,10 @@ namespace RemCom
 			CloseHandle(m_hCommPipe);
 
 			// Decrement instance counter 
-			InterlockedDecrement(&dwSvcPipeInstanceCount);
+			InterlockedDecrement(&m_dwSvcPipeInstanceCount);
 
 			// If this was the last client, let's stop ourself
-			if (dwSvcPipeInstanceCount == 0)
+			if (m_dwSvcPipeInstanceCount == 0)
 				SetEvent(hStopServiceEvent);
 
 		}
@@ -372,12 +390,41 @@ namespace RemCom
 			return rc;
 		}
 	};
+
+	struct debug_streambuf : public std::streambuf
+	{
+	public:
+		debug_streambuf(RemComSvc& svc) : m_svc(svc)
+		{
+		}
+
+	protected:
+		std::streamsize xsputn(const char_type* s, std::streamsize n) override
+		{
+			std::string str;
+			str.append(s, (const unsigned int)n);
+			m_svc.WriteEventString(str);
+			return n;
+		}
+
+		int_type overflow(int_type ch) override
+		{
+			std::string str;
+			str.append(1, (const char)ch);
+			return 1;
+		}
+
+	private:
+		RemComSvc& m_svc;
+	};
 }
 
 // Service "main" function
 void _ServiceMain(void*)
 {
 	RemCom::RemComSvc service;
+	RemCom::debug_streambuf debugbuf(service);
+	service.SetDebugLogStream(new std::ostream(&debugbuf));
 
 	service.StartCommunicationPoolThread();
 

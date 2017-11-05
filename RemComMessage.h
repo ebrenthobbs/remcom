@@ -17,7 +17,7 @@ namespace RemCom
 	class RemComMessage
 	{
 	public:
-		RemComMessage();
+		RemComMessage(DWORD dwReadBufferSize, std::ostream* debugLogStream);
 		~RemComMessage();
 
 		RemComMessage& operator<<(const char* szString);
@@ -42,8 +42,14 @@ namespace RemCom
 		void createPipeName(const char* baseName, std::string& pipeName);
 
 	private:
+		std::ostream* m_debugLogStream;
 		RemComMessagePayload m_payload;
 		std::stringstream m_command;
+		char* m_szLogBuffer;
+		DWORD m_dwReadBufferSize;
+		LPBYTE m_readBuffer;
+
+		void logDebug(const char* fmt, ...);
 
 		bool readAck(const HANDLE &pipe);
 		bool receiveCommandText(const HANDLE &pipe);
@@ -51,6 +57,7 @@ namespace RemCom
 		bool sendCommandText(const HANDLE &pipe, const std::string &command);
 		bool sendHeader(const HANDLE &pipe);
 		bool writeAck(const HANDLE &pipe);
-
+		bool readBytes(const HANDLE &pipe, LPVOID bytes, DWORD numBytes, const char* suffix);
+		bool writeBytes(const HANDLE &pipe, LPVOID bytes, DWORD numBytes, const char* suffix);
 	};
 }

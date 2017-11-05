@@ -517,6 +517,7 @@ namespace RemCom
 				nr.lpProvider = NULL;
 
 				//Establish connection (using username/pwd)
+				cout << "Establishing connection" << endl;
 				rc = WNetAddConnection2(&nr, m_lpszPassword, m_lpszUser, FALSE);
 
 				switch (rc)
@@ -541,8 +542,11 @@ namespace RemCom
 				}
 			}
 			else
+			{
 				// Disconnect
+				cout << "Disconnecting" << endl;
 				rc = WNetCancelConnection2(szRemoteResource, 0, NULL);
+			}
 
 			if (rc == NO_ERROR)
 				return TRUE; // indicate success
@@ -571,6 +575,7 @@ namespace RemCom
 			const char* szRemoteResource = strRemoteResource.str().c_str();
 
 			// Copy the Command's exe file to \\remote\ADMIN$\System32
+			cout << "Copying file to " << szRemoteResource << endl;
 			return CopyFile(m_lpszCommandExe, szRemoteResource, FALSE);
 		}
 
@@ -661,9 +666,18 @@ namespace RemCom
 				hSvcExecutableRes);
 
 			string strSvcExePath = m_lpszMachine;
-			strSvcExePath += "\\ADMIN$\\System32\\" RemComSVCEXE;
+			strSvcExePath += "\\ADMIN$\\System32\\RemComSvc";
+			//time_t now = std::time(NULL);
+			//char timeBuf[100];
+			//struct tm current;
+			//gmtime_s(&current, &now);
+			//strftime(timeBuf, sizeof(timeBuf), "%Y%m%d%H%M%S", &current);
+			//strSvcExePath += ".";
+			//strSvcExePath += timeBuf;
+			strSvcExePath += ".exe";
 
 			// Copy binary file from resources to \\remote\ADMIN$\System32
+			cout << "Creating service file " << strSvcExePath << endl;
 			HANDLE hFileSvcExecutable = CreateFile(
 				strSvcExePath.c_str(),
 				GENERIC_WRITE,
@@ -676,6 +690,7 @@ namespace RemCom
 			if (hFileSvcExecutable == INVALID_HANDLE_VALUE)
 				return FALSE;
 
+			cout << "Writing " << dwSvcExecutableSize << " bytes to service file" << endl;
 			WriteFile(hFileSvcExecutable, pSvcExecutable, dwSvcExecutableSize, &dwWritten, NULL);
 
 			CloseHandle(hFileSvcExecutable);
@@ -687,6 +702,7 @@ namespace RemCom
 		BOOL InstallAndStartRemoteService()
 		{
 			// Open remote Service Manager
+			cout << "Opening service manager on " << m_lpszMachine << endl;
 			SC_HANDLE hSCM = ::OpenSCManager(m_lpszMachine, NULL, SC_MANAGER_ALL_ACCESS);
 
 			if (hSCM == NULL)
@@ -697,6 +713,8 @@ namespace RemCom
 
 			// Creates service on remote machine, if it's not installed yet
 			if (hService == NULL)
+			{
+				cout << "Creating service " << SERVICENAME << endl;
 				hService = ::CreateService(
 					hSCM, SERVICENAME, LONGSERVICENAME,
 					SERVICE_ALL_ACCESS,
@@ -704,16 +722,22 @@ namespace RemCom
 					SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
 					SYSTEM32 "\\" RemComSVCEXE,
 					NULL, NULL, NULL, NULL, NULL);
+			}
 
 			if (hService == NULL)
 			{
 				::CloseServiceHandle(hSCM);
+				cerr << "Could not create service" << endl;
 				return FALSE;
 			}
 
 			// Start service
+			cout << "Starting service" << endl;
 			if (!StartService(hService, 0, NULL))
+			{
+				cerr << "Could not start service" << endl;
 				return FALSE;
+			}
 
 			::CloseServiceHandle(hService);
 			::CloseServiceHandle(hSCM);
@@ -742,6 +766,7 @@ namespace RemCom
 			// Connects to the remote service's communication pipe
 			while (dwRetry--)
 			{
+				cout << "Connecting to remote service communication pipe " << szPipeName << endl;
 				if (WaitNamedPipe(szPipeName, 5000))
 				{
 					m_hCommandPipe = CreateFile(
@@ -756,18 +781,36 @@ namespace RemCom
 					break;
 				}
 				else
+				{
+					cout << "Could not connect, waiting " << dwRetryTimeOut << " ms" << endl;
 					// Try Again
 					Sleep(dwRetryTimeOut);
+				}
 			}
 
-			return m_hCommandPipe != INVALID_HANDLE_VALUE;
+			if (m_hCommandPipe != INVALID_HANDLE_VALUE)
+			{
+				cout << "Connected, changing to message read mode" << endl;
+				DWORD dwMode = PIPE_READMODE_MESSAGE;
+
+				if (!SetNamedPipeHandleState(
+					m_hCommandPipe,
+					&dwMode,
+					NULL,	// don't set maximum bytes
+					NULL))	// don't set maximum time
+				{
+					return false;
+				}
+				return true;
+			}
+
+			return false;
 		}
 
 		// Fill the communication message structure
 		// This structure will be transferred to remote machine
 		BOOL BuildMessageStructure(RemComMessage* pMsg)
 		{
-			LPCTSTR lpszWorkingDir = GetParamValue("d:");
 			const char* szArguments = m_strArguments.c_str();
 
 			// Info
@@ -804,6 +847,7 @@ namespace RemCom
 			// No wait
 			pMsg->setNoWait(IsCmdLineParameter("nowait"));
 
+			LPCTSTR lpszWorkingDir = GetParamValue("d:");
 			if (lpszWorkingDir != NULL)
 				pMsg->setWorkingDirectory(lpszWorkingDir);
 
@@ -1070,7 +1114,7 @@ namespace RemCom
 		BOOL ExecuteRemoteCommand()
 		{
 			DWORD dwTemp = 0;
-			RemComMessage msg;
+			RemComMessage msg(BUFSIZ, &cerr);
 			RemComResponse response;
 
 			::ZeroMemory(&response, sizeof(response));

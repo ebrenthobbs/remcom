@@ -1,17 +1,23 @@
 #include "RemComMessage.h"
+#include <stdio.h>
+
+#define LOG_BUFFER_SIZE 2048
 
 namespace RemCom
 {
 	using namespace std;
 
-	RemComMessage::RemComMessage()
+	RemComMessage::RemComMessage(DWORD dwReadBufferSize, std::ostream* debugLogStream) : m_dwReadBufferSize(dwReadBufferSize), m_debugLogStream(debugLogStream)
 	{
-
+		ZeroMemory(&m_payload, sizeof(m_payload));
+		m_szLogBuffer = new char[LOG_BUFFER_SIZE];
+		m_readBuffer = new byte[m_dwReadBufferSize];
 	}
 
 	RemComMessage::~RemComMessage()
 	{
-
+		delete m_szLogBuffer;
+		delete m_readBuffer;
 	}
 
 	void RemComMessage::createPipeName(const char* baseName, string& pipeName)
@@ -75,7 +81,11 @@ namespace RemCom
 
 	bool RemComMessage::receive(const HANDLE &pipe)
 	{
+		logDebug("Receiving message\n");
 		if (!receiveHeader(pipe))
+			return false;
+
+		if (!writeAck(pipe))
 			return false;
 
 		if (!receiveCommandText(pipe))
@@ -89,6 +99,7 @@ namespace RemCom
 
 	bool RemComMessage::send(const HANDLE &pipe)
 	{
+		logDebug("Sending message\n");
 		const string& command = m_command.str();
 		m_payload.dwCommandLength = command.length();
 
@@ -98,7 +109,10 @@ namespace RemCom
 		if (!readAck(pipe))
 			return false;
 
-		return sendCommandText(pipe, command);
+		if (!sendCommandText(pipe, command))
+			return false;
+
+		return readAck(pipe);
 	}
 
 	//
@@ -107,14 +121,13 @@ namespace RemCom
 
 	bool RemComMessage::receiveCommandText(const HANDLE &pipe)
 	{
-		DWORD bytesRead;
 		char* buf = new char[m_payload.dwCommandLength+1];
-		if (!ReadFile(pipe, buf, m_payload.dwCommandLength, &bytesRead, NULL) || bytesRead != m_payload.dwCommandLength)
+		if (!readBytes(pipe, buf, m_payload.dwCommandLength, "command bytes"))
 		{
 			delete buf;
 			return false;
 		}
-
+		buf[m_payload.dwCommandLength] = 0;
 		m_command << buf;
 		delete buf;
 		return true;
@@ -122,38 +135,23 @@ namespace RemCom
 
 	bool RemComMessage::sendCommandText(const HANDLE &pipe, const string &command)
 	{
-		DWORD bytesWritten;
-		BOOL bSuccess = WriteFile(pipe, command.c_str(), m_payload.dwCommandLength, &bytesWritten, NULL);
-		if (!bSuccess)
-			return false;
-		return m_payload.dwCommandLength == bytesWritten;
+		return writeBytes(pipe, (LPVOID)command.c_str(), m_payload.dwCommandLength, "command bytes");
 	}
 
 	bool RemComMessage::receiveHeader(const HANDLE &pipe)
 	{
-		::ZeroMemory(&m_payload, sizeof(m_payload));
-		DWORD bytesRead;
-		if (!ReadFile(pipe, &m_payload, sizeof(m_payload), &bytesRead, NULL) || bytesRead == 0)
-			return false;
-		return true;
+		return readBytes(pipe, &m_payload, sizeof(m_payload), "header bytes");
 	}
 
 	bool RemComMessage::sendHeader(const HANDLE &pipe)
 	{
-		DWORD bytesWritten;
-		BOOL bSuccess = WriteFile(pipe, &m_payload, sizeof(m_payload), &bytesWritten, NULL);
-		if (!bSuccess)
-			return false;
-		if (sizeof(m_payload) != bytesWritten)
-			return false;
-		return true;
+		return writeBytes(pipe, &m_payload, sizeof(m_payload), "header bytes");
 	}
 
 	bool RemComMessage::readAck(const HANDLE &pipe)
 	{
 		RemComResponse response;
-		DWORD bytesRead;
-		BOOL bSuccess = ReadFile(pipe, &response, sizeof(response), &bytesRead, NULL);
+		BOOL bSuccess = readBytes(pipe, &response, sizeof(response), "ack bytes");
 		if (!bSuccess)
 			return false;
 		if (response.dwErrorCode != 0)
@@ -166,9 +164,54 @@ namespace RemCom
 		RemComResponse response;
 		response.dwErrorCode = 0;
 		response.dwReturnCode = 0;
-		DWORD bytesWritten;
-		if (!WriteFile(pipe, &response, sizeof(response), &bytesWritten, NULL) || bytesWritten != sizeof(response))
+		return writeBytes(pipe, &response, sizeof(response), "ack bytes");
+	}
+
+	bool RemComMessage::readBytes(const HANDLE &pipe, LPVOID bytes, DWORD bytesToRead, const char* suffix)
+	{
+		logDebug("Reading %d %s\n", bytesToRead, suffix);
+		DWORD totalBytesRead = 0;
+		::ZeroMemory(bytes, bytesToRead);
+		LPBYTE curPtr = (LPBYTE)bytes;
+		while (totalBytesRead < bytesToRead)
+		{
+			logDebug("Reading %d byte buffer\n", m_dwReadBufferSize);
+			DWORD bytesRead = 0;
+			BOOL bSuccess = ReadFile(pipe, m_readBuffer, m_dwReadBufferSize, &bytesRead, NULL);
+			if (!bSuccess && GetLastError() != ERROR_MORE_DATA)
+				return false;
+			if (bytesRead > 0)
+			{
+				logDebug("Read %d byte(s)\n", bytesRead);
+				memcpy(curPtr, m_readBuffer, bytesRead);
+				curPtr += bytesRead;
+				totalBytesRead += bytesRead;
+			}
+		}
+		return true;
+	}
+
+	bool RemComMessage::writeBytes(const HANDLE &pipe, LPVOID bytes, DWORD bytesToWrite, const char* suffix)
+	{
+		logDebug("Writing %d %s\n", bytesToWrite, suffix);
+		DWORD bytesWritten = 0;
+		if (!WriteFile(pipe, bytes, bytesToWrite, &bytesWritten, NULL))
+			return false;
+		//logDebug("Flushing buffers\n");
+		//FlushFileBuffers(pipe);
+		if (bytesWritten != bytesToWrite)
 			return false;
 		return true;
+	}
+
+	void RemComMessage::logDebug(const char* fmt, ...)
+	{
+		if (m_debugLogStream == NULL)
+			return;
+
+		va_list args;
+		va_start(args, fmt);
+		vsprintf_s(m_szLogBuffer, LOG_BUFFER_SIZE, fmt, args);
+		(*m_debugLogStream) << m_szLogBuffer;
 	}
 }
