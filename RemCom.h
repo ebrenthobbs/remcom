@@ -41,6 +41,8 @@
 #include <sstream>
 #include <cstdarg>
 #include <ctime>
+#include <mutex>
+#include <vector>
 #include <userenv.h>
 #include "ProcFunctions.h"
 //#include <strsafe.h>
@@ -52,7 +54,7 @@
 #define RemComSVCEXE     "RemComSvc.exe"
 #define ProcComs         _T("ProcComs.bin")
 
-#define RemComCOMM           _T("RemCom_communicaton")
+#define RemComCOMM           _T("RemCom_comm")
 #define RemComSTDOUT         _T("RemCom_stdout")
 #define RemComSTDIN          _T("RemCom_stdin")
 #define RemComSTDERR         _T("RemCom_stderr")

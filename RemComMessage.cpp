@@ -187,6 +187,10 @@ namespace RemCom
 				curPtr += bytesRead;
 				totalBytesRead += bytesRead;
 			}
+			else
+			{
+				logDebug("Read completed without any bytes read");
+			}
 		}
 		return true;
 	}
@@ -194,13 +198,32 @@ namespace RemCom
 	bool RemComMessage::writeBytes(const HANDLE &pipe, LPVOID bytes, DWORD bytesToWrite, const char* suffix)
 	{
 		logDebug("Writing %d %s\n", bytesToWrite, suffix);
-		DWORD bytesWritten = 0;
-		if (!WriteFile(pipe, bytes, bytesToWrite, &bytesWritten, NULL))
-			return false;
-		//logDebug("Flushing buffers\n");
-		//FlushFileBuffers(pipe);
-		if (bytesWritten != bytesToWrite)
-			return false;
+		DWORD totalBytesWritten = 0;
+		LPBYTE curPtr = (LPBYTE)bytes;
+		while (totalBytesWritten < bytesToWrite)
+		{
+			DWORD bytesToWriteThisTime = bytesToWrite - totalBytesWritten;
+			if (bytesToWriteThisTime > m_dwReadBufferSize)
+				bytesToWriteThisTime = m_dwReadBufferSize;
+			logDebug("Writing %d byte buffer\n", bytesToWriteThisTime);
+			DWORD bytesWritten = 0;
+			if (!WriteFile(pipe, curPtr, bytesToWriteThisTime, &bytesWritten, NULL))
+				return false;
+			totalBytesWritten += bytesWritten;
+			curPtr += bytesWritten;
+			logDebug("Flushing buffers\n");
+			if (!FlushFileBuffers(pipe))
+			{
+				DWORD err = GetLastError();
+				logDebug("FlushFileBuffers failed, error code %d\n", err);
+				SetLastError(err);
+				return false;
+			}
+			else
+			{
+				logDebug("Buffers flushed\n");
+			}
+		}
 		return true;
 	}
 

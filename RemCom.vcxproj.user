@@ -4,7 +4,7 @@
     <ShowAllFiles>false</ShowAllFiles>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <LocalDebuggerCommandArguments>\\b-300769-w10 /user:corporate\brehobbs /pwd:S0forth! "osql -S .\SQLEXPRESS -U RemoteUser -P pickles -w1000 -Q \"use UserManagement; select top 1 * from FMHDashboardUser u\""</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>\\gatewayfx "sqlcmd -U sa -P Fr0stic8 -S GATEWAYFX\SQLEXPRESS -Q \"select name from sys.databases\""</LocalDebuggerCommandArguments>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">

@@ -150,6 +150,7 @@
     <ClCompile Include="RemComMessage.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="ProcFunctions.h" />
     <ClInclude Include="RemCom.h" />
     <ClInclude Include="RemComMessage.h" />
     <ClInclude Include="resource.h" />
