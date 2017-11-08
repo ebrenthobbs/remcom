@@ -34,122 +34,106 @@
 #include <process.h>
 #include <fstream>
 #include "RemComSvc.h"
-#include "../RemComCommon/RemCom.h"
-#include "../RemComCommon/RemComMessage.h"
-#include "../RemComCommon/RemComResponse.h"
+#include "../RemCom.h"
+#include "../RemComMessage.h"
+#include "../Logger.h"
+
+#define BUFSIZE 512
+#define LOG_BUFFER_SIZE 2048
 
 namespace RemCom
 {
 	using namespace std;
 
-	class RemComSvc
+	class Component
 	{
 	public:
-		void StartCommunicationPoolThread()
+		Component()
 		{
-			// Start CommunicationPoolThread, which handles the incoming instances
-			_beginthread(RemCom::RemComSvc::CommunicationPoolThread, 0, this);
+		}
+
+	protected:
+		Logger* m_pLogger;
+
+		DWORD writeLastError(const string strPrefix)
+		{
+			string strMessage = strPrefix;
+			LPVOID lpvMessageBuffer;
+			DWORD rc = GetLastError();
+
+			FormatMessage(
+				FORMAT_MESSAGE_ALLOCATE_BUFFER |
+				FORMAT_MESSAGE_FROM_SYSTEM |
+				FORMAT_MESSAGE_IGNORE_INSERTS,
+				NULL,
+				rc,
+				MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+				(LPTSTR)&lpvMessageBuffer,
+				0,
+				NULL
+			);
+
+			m_pLogger->logError("%s: %s", strPrefix.c_str(), (LPTSTR)lpvMessageBuffer);
+
+			LocalFree(lpvMessageBuffer);
+			//ExitProcess(GetLastError());
+			return rc;
+		}
+
+		DWORD writeLastError(const stringstream strPrefix)
+		{
+			const string strTemp = strPrefix.str();
+			return writeLastError(strTemp);
+		}
+
+		DWORD writeLastError(LPCTSTR szPrefix)
+		{
+			string strPrefix = szPrefix;
+			return writeLastError(strPrefix);
 		}
 
 	private:
+		char m_szCodeDisplayBuffer[40];
+	};
+
+	class ClientInstance : public Component
+	{
+	public:
+		ClientInstance(HANDLE hCommPipe, Logger* pLogger) : m_hCommPipe(hCommPipe)
+		{
+			m_pLogger = pLogger;
+			m_pLogger->logDebug("ClientInstance: constructor");
+		}
+
+		void start(function<void()> shutdownCallback)
+		{
+			m_pLogger->logDebug("ClientInstance: Starting client thread");
+			m_shutdownCallback = shutdownCallback;
+			_beginthread(CommunicationPipeThreadProc, 0, (void*)this);
+		}
+
+	private:
+		static DWORD s_dwSvcPipeInstanceCount;
+
 		HANDLE	m_hCommPipe = NULL;
-		LONG	dwSvcPipeInstanceCount = 0;
-		TCHAR	szCodeDisplayBuffer[40];
+		function<void()> m_shutdownCallback;
 
-		static void CommunicationPoolThread(PVOID pThis)
-		{
-			RemComSvc* pInstance = (RemComSvc*)pThis;
-			pInstance->CommunicationPoolThread();
-		}
-
-		// Communication Thread Pool, handles the incoming RemCom.exe requests
-		void CommunicationPoolThread()
-		{
-			WriteEventLog("Starting communication pool thread");
-
-			for (;;)
-			{
-				SECURITY_ATTRIBUTES SecAttrib = { 0 };
-				SECURITY_DESCRIPTOR SecDesc;
-
-				InitializeSecurityDescriptor(&SecDesc, SECURITY_DESCRIPTOR_REVISION);
-				SetSecurityDescriptorDacl(&SecDesc, TRUE, NULL, TRUE);
-
-				SecAttrib.nLength = sizeof(SECURITY_ATTRIBUTES);
-				SecAttrib.lpSecurityDescriptor = &SecDesc;;
-				SecAttrib.bInheritHandle = TRUE;
-
-				// Create communication pipe
-				m_hCommPipe = CreateNamedPipe(
-					"\\\\.\\pipe\\" RemComCOMM,
-					PIPE_ACCESS_DUPLEX,
-					PIPE_TYPE_MESSAGE | PIPE_WAIT,
-					PIPE_UNLIMITED_INSTANCES,
-					0,
-					0,
-					(DWORD)-1,
-					&SecAttrib);
-
-				if (m_hCommPipe != NULL)
-				{
-					// Waiting for client to connect to this pipe
-					ConnectNamedPipe(m_hCommPipe, NULL);
-					_beginthread(CommunicationPipeThreadProc, 0, (void*)this);
-				}
-			}
-		}
-
-		LPCTSTR GetCodeDisplayString(DWORD dwCode)
-		{
-			_stprintf_s(szCodeDisplayBuffer, "%d(%08X)", dwCode, dwCode);
-			return szCodeDisplayBuffer;
-		}
-
-		void WriteEventLog(string strMessage)
-		{
-			//TCHAR szTempPathBuf[MAX_PATH];
-			//GetTempPath(MAX_PATH, szTempPathBuf);
-			//string logFilePath = szTempPathBuf;
-			string logFilePath = "C:/temp";
-			logFilePath += "/RemComSvc.log";
-			ofstream logStream;
-			logStream.open(logFilePath, ios_base::app);
-			logStream << strMessage.c_str() << endl;
-			logStream.close();
-		}
-
-		void WriteLastError(const string strPrefix)
-		{
-			string strMessage = strPrefix;
-			strMessage += GetCodeDisplayString(GetLastError());
-			WriteEventLog(strMessage);
-		}
-
-		void WriteLastError(const stringstream strPrefix)
-		{
-			const string strTemp = strPrefix.str();
-			WriteLastError(strTemp);
-		}
-
-		void WriteLastError(LPCTSTR szPrefix)
-		{
-			string strPrefix = szPrefix;
-			WriteLastError(strPrefix);
-		}
-
-		// Handles a client
+		// Client thread proc
 		static void CommunicationPipeThreadProc(void* pThis)
 		{
-			RemComSvc* pInstance = (RemComSvc*)pThis;
-			pInstance->CommunicationPipeThreadProc();
+			ClientInstance* pInstance = (ClientInstance*)pThis;
+			pInstance->runCommunicationPipeThread();
 		}
 
-		void CommunicationPipeThreadProc()
+		void runCommunicationPipeThread()
 		{
-			WriteEventLog("Starting communication pipe thread");
+			RemComMessage msg(BUFSIZ, m_pLogger);
+			RemComResponse response;
+
+			DWORD dwWritten;
 
 			// Increment instance counter 
-			InterlockedIncrement(&dwSvcPipeInstanceCount);
+			InterlockedIncrement(&s_dwSvcPipeInstanceCount);
 
 			WaitForMessageThenProcess();
 
@@ -174,15 +158,16 @@ namespace RemCom
 		void WaitForMessageFromClient(RemCom::RemComMessage &msg)
 		{
 			// Waiting for communication message from client
-			stringstream strMessage;
-			strMessage << "Reading fixed size command of " << sizeof(msg) << " bytes from client";
-			WriteEventLog(strMessage.str());
-
-			DWORD dwRead;
-			if (!ReadFile(m_hCommPipe, &msg, sizeof(msg), &dwRead, NULL) || dwRead == 0)
+			m_pLogger->logDebug("Waiting for client message");
+			if (!msg.receive(m_hCommPipe))
 			{
-				WriteLastError(_T("Could not read message from client. Error was "));
-				return;
+				writeLastError("Could not read message from client.");
+				goto cleanup;
+			}
+			else
+			{
+				string command;
+				m_pLogger->logDebug(msg.getCommand(command).c_str());
 			}
 
 			WriteEventLog(string(msg.szCommand));
@@ -191,30 +176,35 @@ namespace RemCom
 		void ProcessMessage(RemComMessage& msg, RemComResponse& response)
 		{
 			// Execute the requested command
-			response.dwErrorCode = Execute(&msg, &response.dwReturnCode);
+			response.dwErrorCode = execute(&msg, &response.dwReturnCode);
+			m_pLogger->logDebug("Returned from execute, writing %d response bytes", sizeof(response));
 
 			// Send back the response message (client is waiting for this response)
 			DWORD dwWritten;
 			if (!WriteFile(m_hCommPipe, &response, sizeof(response), &dwWritten, NULL) || dwWritten == 0)
 			{
-				WriteLastError(_T("Could not write response to client. Error was "));
-				return;
+				writeLastError("Could not write response to client");
+				goto cleanup;
+			}
+			else
+			{
+				m_pLogger->logDebug("Wrote response to client. dwErrorCode=%d, dwReturnCode=%d", response.dwErrorCode, response.dwReturnCode);
 			}
 
-			stringstream strMessage;
-			strMessage << "Wrote " << dwWritten << "response bytes to client";
-			WriteEventLog(strMessage.str());
-		}
+		cleanup:
+			m_pLogger->logDebug("Client finished");
+			DisconnectNamedPipe(m_hCommPipe);
+			CloseHandle(m_hCommPipe);
 
-		const string CreatePipeName(LPCTSTR szBaseName, RemComMessage* pMsg)
-		{
-			stringstream strPipeName;
-			strPipeName << "\\\\.\\pipe\\" << szBaseName << pMsg->szMachine << pMsg->dwProcessId;
-			return strPipeName.str();
+			// Decrement instance counter 
+			InterlockedDecrement(&s_dwSvcPipeInstanceCount);
+
+			// Tell the service instance we're finished
+			m_shutdownCallback();
 		}
 
 		// Creates named pipes for stdout, stderr, stdin
-		BOOL CreateNamedPipes(RemComMessage* pMsg, STARTUPINFO* psi)
+		bool createProcessIoPipes(RemComMessage* pMsg, STARTUPINFO* psi)
 		{
 			SECURITY_ATTRIBUTES SecAttrib = { 0 };
 			SECURITY_DESCRIPTOR SecDesc;
@@ -231,19 +221,18 @@ namespace RemCom
 			psi->hStdInput = INVALID_HANDLE_VALUE;
 			psi->hStdError = INVALID_HANDLE_VALUE;
 
-			const string strStdOut = CreatePipeName(RemComSTDOUT, pMsg);
+			string strStdOut, strStdIn, strStdErr;
+			pMsg->createPipeName(RemComSTDOUT, strStdOut);
+			pMsg->createPipeName(RemComSTDIN, strStdIn);
+			pMsg->createPipeName(RemComSTDERR, strStdErr);
 			const char* szStdOut = strStdOut.c_str();
-			const string strStdIn = CreatePipeName(RemComSTDIN, pMsg);
 			const char* szStdIn = strStdIn.c_str();
-			const string strStdErr = CreatePipeName(RemComSTDERR, pMsg);
 			const char* szStdErr = strStdErr.c_str();
 
-			stringstream strMessage;
-			strMessage << "Creating named pipes for remote caller:"
-				<< " stdin=" << strStdIn
-				<< " stdout=" << strStdOut
-				<< " stderr=" << strStdErr;
-			WriteEventLog(strMessage.str());
+			m_pLogger->logDebug("Creating named pipes for remote caller: "
+				" stdin=%s"
+				" stdout=%s"
+				" stderr=%s", szStdIn, szStdOut, szStdErr);
 
 			// Create StdOut pipe
 			psi->hStdOutput = CreateNamedPipe(
@@ -255,7 +244,7 @@ namespace RemCom
 				0,
 				(DWORD)-1,
 				&SecAttrib);
-			CheckPipeCreationError(psi->hStdOutput, szStdOut);
+			checkPipeCreationError(psi->hStdOutput, szStdOut);
 
 			// Create StdError pipe
 			psi->hStdError = CreateNamedPipe(
@@ -267,7 +256,7 @@ namespace RemCom
 				0,
 				(DWORD)-1,
 				&SecAttrib);
-			CheckPipeCreationError(psi->hStdError, szStdErr);
+			checkPipeCreationError(psi->hStdError, szStdErr);
 
 			// Create StdIn pipe
 			psi->hStdInput = CreateNamedPipe(
@@ -279,7 +268,7 @@ namespace RemCom
 				0,
 				(DWORD)-1,
 				&SecAttrib);
-			CheckPipeCreationError(psi->hStdInput, szStdIn);
+			checkPipeCreationError(psi->hStdInput, szStdIn);
 
 			if (psi->hStdOutput == INVALID_HANDLE_VALUE ||
 				psi->hStdError == INVALID_HANDLE_VALUE ||
@@ -289,7 +278,7 @@ namespace RemCom
 				CloseHandle(psi->hStdError);
 				CloseHandle(psi->hStdInput);
 
-				return FALSE;
+				return false;
 			}
 
 			// Waiting for client to connect to this pipe
@@ -297,20 +286,20 @@ namespace RemCom
 			ConnectNamedPipe(psi->hStdInput, NULL);
 			ConnectNamedPipe(psi->hStdError, NULL);
 
-			return TRUE;
+			return true;
 		}
 
-		void CheckPipeCreationError(HANDLE hPipe, const char* szPipeName)
+		void checkPipeCreationError(HANDLE hPipe, const char* szPipeName)
 		{
 			if (hPipe != INVALID_HANDLE_VALUE)
 				return;
 			stringstream strMessage;
-			strMessage << "Error creating pipe " << szPipeName << ": ";
-			WriteLastError(strMessage.str());
+			strMessage << "Error creating pipe " << szPipeName;
+			writeLastError(strMessage.str());
 		}
-		
+
 		// Execute the requested client command
-		DWORD Execute(RemComMessage* pMsg, DWORD* pReturnCode)
+		DWORD execute(RemComMessage* pMsg, DWORD* pReturnCode)
 		{
 			DWORD rc;
 			PROCESS_INFORMATION pi;
@@ -319,21 +308,23 @@ namespace RemCom
 			::ZeroMemory(&si, sizeof(si));
 			si.cb = sizeof(si);
 
-			// Creates named pipes for stdout, stdin, stderr
+			// Create named pipes for stdout, stdin, stderr
 			// Client will sit on these pipes
-			if (!CreateNamedPipes(pMsg, &si))
+			if (!createProcessIoPipes(pMsg, &si))
 				return 2;
 
 			*pReturnCode = 0;
 			rc = 0;
 
-			// Initializes command
+			// Initialize command
 			// cmd.exe /c /q allows us to execute internal dos commands too.
-			stringstream strCommand;
-			strCommand << "cmd.exe /q /c \"" << pMsg->szCommand << "\"";
-			const string tmpCommand = strCommand.str();
-			LPTSTR szCommand = const_cast<LPTSTR>(tmpCommand.c_str());
-
+			string command;
+			pMsg->getCommand(command);
+			size_t bufferSize = command.length() + 40;
+			LPTSTR szCommand = new TCHAR[bufferSize];
+			sprintf_s(szCommand, bufferSize, "cmd.exe /q /c \"%s\"", command.c_str());
+			LPCTSTR szWorkingDir = pMsg->getWorkingDirectory();
+			
 			// Start the requested process
 			if (CreateProcess(
 				NULL,
@@ -341,27 +332,155 @@ namespace RemCom
 				NULL,
 				NULL,
 				TRUE,
-				pMsg->dwPriority | CREATE_NO_WINDOW,
+				pMsg->getPriority() | CREATE_NO_WINDOW,
 				NULL,
-				pMsg->szWorkingDir[0] != _T('\0') ? pMsg->szWorkingDir : NULL,
+				szWorkingDir[0] != _T('\0') ? szWorkingDir : NULL,
 				&si,
 				&pi))
-			{
+			{	
 				HANDLE hProcess = pi.hProcess;
 
 				*pReturnCode = 0;
 
-				// Waiting for process to terminate
-				if (!pMsg->bNoWait)
+				// Wait for process to terminate
+				if (pMsg->shouldWait())
 				{
+					m_pLogger->logDebug("Waiting for process to terminate");
 					WaitForSingleObject(hProcess, INFINITE);
+					m_pLogger->logDebug("Process terminated");
 					GetExitCodeProcess(hProcess, pReturnCode);
+					stringstream stdMessage;
+					m_pLogger->logDebug("Exit code = %d", *pReturnCode);
+				}
+				else
+				{
+					m_pLogger->logDebug("NOT waiting for process to terminate");
 				}
 			}
 			else
+			{
+				writeLastError("Error creating process");
 				rc = 1;
+			}
 
+			delete szCommand;
 			return rc;
+		}
+	};
+
+	DWORD ClientInstance::s_dwSvcPipeInstanceCount = 0;
+
+	class Service : public Component
+	{
+	public:
+		Service()
+		{
+
+		}
+
+		void start()
+		{
+			m_logStream.open("c:\\temp\\remcomsvc.log", ios_base::out | ios_base::in | ios_base::app);
+			m_pLogger = new Logger(m_logStream, LogLevel::Debug, LOG_BUFFER_SIZE);
+
+			// Start CommunicationPoolThread, which handles the incoming instances
+			_beginthread(RemCom::Service::CommunicationPoolThread, 0, this);
+		}
+
+		void stop()
+		{
+			m_pLogger->logDebug("Shutting down");
+			//TODO Gracefully shut down the processing thread
+		}
+
+	private:
+		ofstream m_logStream;
+		vector<ClientInstance*> m_clientInstances;
+		mutex m_clientMutex;
+
+		static void CommunicationPoolThread(PVOID pThis)
+		{
+			Service* pInstance = (Service*)pThis;
+			pInstance->runCommunicationPoolThread();
+		}
+
+		// Communication Thread Pool, handles the incoming RemCom.exe requests
+		void runCommunicationPoolThread()
+		{	
+			m_pLogger->logDebug("Starting communication pool thread");
+			LPTSTR szCommPipeName = "\\\\.\\pipe\\" RemComCOMM;
+			for (;;)
+			{
+				DWORD pipeMode = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT;
+				size_t numInstances = m_clientInstances.size();
+				m_pLogger->logDebug("Awaiting next client connection on pipe " "\\\\.\\pipe\\" RemComCOMM " in %s mode. # current instances: %d",
+					(pipeMode & PIPE_TYPE_MESSAGE ? "MESSAGE" : "BYTE"), numInstances);
+				SECURITY_ATTRIBUTES SecAttrib = { 0 };
+				SECURITY_DESCRIPTOR SecDesc;
+
+				InitializeSecurityDescriptor(&SecDesc, SECURITY_DESCRIPTOR_REVISION);
+				SetSecurityDescriptorDacl(&SecDesc, TRUE, NULL, TRUE);
+
+				SecAttrib.nLength = sizeof(SECURITY_ATTRIBUTES);
+				SecAttrib.lpSecurityDescriptor = &SecDesc;;
+				SecAttrib.bInheritHandle = TRUE;
+
+				// Create communication pipe
+				HANDLE hCommPipe = CreateNamedPipe(
+					szCommPipeName,
+					PIPE_ACCESS_DUPLEX,
+					pipeMode,
+					PIPE_UNLIMITED_INSTANCES,
+					BUFSIZE,
+					BUFSIZE,
+					0,
+					&SecAttrib);
+
+				if (hCommPipe != INVALID_HANDLE_VALUE)
+				{
+					// Waiting for client to connect to this pipe
+					if (ConnectNamedPipe(hCommPipe, NULL))
+					{
+						m_pLogger->logDebug("Client connected, creating client instance");
+						ClientInstance* client = new ClientInstance(hCommPipe, m_pLogger);
+						m_pLogger->logDebug("Adding client to instance collection");
+						m_clientInstances.push_back(client);
+						m_pLogger->logDebug("Starting client");
+						try
+						{
+							function<void()> shutdownCallback = [&]() { removeClientInstance(client); };
+							client->start(shutdownCallback);
+							m_pLogger->logDebug("Called client->start");
+						}
+						catch (...)
+						{
+							m_pLogger->logDebug("Unknown exception calling client.start");
+							throw;
+						}
+					}
+					else
+					{
+						writeLastError("ConnectNamedPipe failed waiting for client to connect");
+					}
+				}
+				else
+				{
+					writeLastError("CreateNamedPipe failed creating communication pipe");
+				}
+			}
+		}
+
+		void removeClientInstance(const ClientInstance* client)
+		{
+			m_pLogger->logDebug("Removing completed client");
+			m_clientMutex.lock();
+			auto it = std::find(m_clientInstances.begin(), m_clientInstances.end(), client);
+			if (it != m_clientInstances.end())
+			{
+				m_clientInstances.erase(it);
+				delete client;
+			}
+			m_clientMutex.unlock();
 		}
 	};
 }
@@ -369,14 +488,18 @@ namespace RemCom
 // Service "main" function
 void _ServiceMain(void*)
 {
-	RemCom::RemComSvc service;
+	// Create/configure service
+	RemCom::Service service;
 
-	service.StartCommunicationPoolThread();
+	// Tell service to start processing incoming requests
+	service.start();
 
-	// Waiting for stop the service
+	// Wait service stop event
 	while (WaitForSingleObject(hStopServiceEvent, 10) != WAIT_OBJECT_0)
 	{
 	}
 
+	// Stop the service
 	CloseHandle(hStopServiceEvent);
+	service.stop();
 }

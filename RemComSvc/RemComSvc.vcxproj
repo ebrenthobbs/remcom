@@ -96,6 +96,7 @@
       <SubSystem>Console</SubSystem>
       <OutputFile>.\Debug\RemComSvc.exe</OutputFile>
       <AdditionalDependencies>odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -132,6 +133,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\RemComMessage.cpp" />
     <ClCompile Include="RemComSvc.cpp" />
     <ClCompile Include="Service.cpp" />
   </ItemGroup>
