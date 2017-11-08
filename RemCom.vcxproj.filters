@@ -27,6 +27,9 @@
     </ClInclude>
     <ClInclude Include="RemComMessage.h" />
     <ClInclude Include="ProcFunctions.h" />
+    <ClInclude Include="Logger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="ProcComs\Release\ProcComs.bin" />

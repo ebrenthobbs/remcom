@@ -43,6 +43,7 @@
 
 #include "RemCom.h"
 #include "RemComMessage.h"
+#include "Logger.h"
 
 #define		DESKTOP_ALL (DESKTOP_READOBJECTS | DESKTOP_CREATEWINDOW | \
 			DESKTOP_CREATEMENU | DESKTOP_HOOKCONTROL | DESKTOP_JOURNALRECORD | \
@@ -58,7 +59,7 @@
 
  // Constant Definitions
 #define		SIZEOF_BUFFER   0x100
-
+#define		LOG_BUFFER_SIZE	4096
 
 namespace RemCom
 {
@@ -67,11 +68,19 @@ namespace RemCom
 	class RemCom
 	{
 	public:
+		RemCom() : m_logger(cerr, LogLevel::Error, LOG_BUFFER_SIZE)
+		{
+		}
+
 		int run()
 		{
 			int   rc = 0;
 			DWORD dwTemp = SIZEOF_BUFFER;
 			DWORD dwIndex = 0;
+
+			LPCTSTR minLogLevel = getParamValue("v:");
+			if (minLogLevel != NULL)
+				m_logger.setMinLogLevel(minLogLevel);
 
 			m_lpszMachine = getRemoteMachineName();
 
@@ -123,6 +132,7 @@ namespace RemCom
 		}
 
 	private:
+		Logger		m_logger;
 
 		// Local Machine Settings
 		string		m_strThisMachine;
@@ -425,7 +435,7 @@ namespace RemCom
 			DWORD mode;
 
 			if (!GetConsoleMode(handle, &mode))
-				return FALSE;
+				return false;
 
 			if (bEcho)
 				mode |= ENABLE_ECHO_INPUT;
@@ -444,7 +454,7 @@ namespace RemCom
 			cout << "Enter Password: " << flush;
 
 			// Turn off echo
-			if (enableEcho(hInput, FALSE))
+			if (enableEcho(hInput, false))
 			{
 				TCHAR lpszPwd[SIZEOF_BUFFER];
 				// Read password from console
@@ -516,7 +526,7 @@ namespace RemCom
 				nr.lpProvider = NULL;
 
 				//Establish connection (using username/pwd)
-				cout << "Establishing connection" << endl;
+				m_logger.logInfo("Establishing connection to %s", szRemoteResource);
 				rc = WNetAddConnection2(&nr, m_lpszPassword, m_lpszUser, FALSE);
 
 				switch (rc)
@@ -540,7 +550,7 @@ namespace RemCom
 			else
 			{
 				// Disconnect
-				cout << "Disconnecting" << endl;
+				m_logger.logDebug("Disconnecting from %s", szRemoteResource);
 				rc = WNetCancelConnection2(szRemoteResource, 0, NULL);
 			}
 
@@ -571,7 +581,7 @@ namespace RemCom
 			const char* szRemoteResource = strRemoteResource.str().c_str();
 
 			// Copy the Command's exe file to \\remote\ADMIN$\System32
-			cout << "Copying file to " << szRemoteResource << endl;
+			m_logger.logDebug("Copying file to %s", szRemoteResource);
 			return CopyFile(m_lpszCommandExe, szRemoteResource, FALSE);
 		}
 
@@ -628,8 +638,6 @@ namespace RemCom
 				return false;
 
 			WriteFile(hFileLocalBinary, pLocalBinary, dwLocalBinarySize, &dwWritten, NULL);
-			//	cout <<  "File Written ...\n"  << flush; 
-			//	Sleep(10000);
 			CloseHandle(hFileLocalBinary);
 
 			return dwWritten == dwLocalBinarySize;
@@ -673,7 +681,7 @@ namespace RemCom
 			strSvcExePath += ".exe";
 
 			// Copy binary file from resources to \\remote\ADMIN$\System32
-			cout << "Creating service file " << strSvcExePath << endl;
+			m_logger.logInfo("Creating service file %s", strSvcExePath.c_str());
 			HANDLE hFileSvcExecutable = CreateFile(
 				strSvcExePath.c_str(),
 				GENERIC_WRITE,
@@ -686,7 +694,7 @@ namespace RemCom
 			if (hFileSvcExecutable == INVALID_HANDLE_VALUE)
 				return false;
 
-			cout << "Writing " << dwSvcExecutableSize << " bytes to service file" << endl;
+			m_logger.logDebug("Writing %d bytes to service file", dwSvcExecutableSize);
 			WriteFile(hFileSvcExecutable, pSvcExecutable, dwSvcExecutableSize, &dwWritten, NULL);
 
 			CloseHandle(hFileSvcExecutable);
@@ -698,7 +706,7 @@ namespace RemCom
 		bool installAndStartRemoteService()
 		{
 			// Open remote Service Manager
-			cout << "Opening service manager on " << m_lpszMachine << endl;
+			m_logger.logInfo("Opening service manager on %s", m_lpszMachine);
 			SC_HANDLE hSCM = ::OpenSCManager(m_lpszMachine, NULL, SC_MANAGER_ALL_ACCESS);
 
 			if (hSCM == NULL)
@@ -710,7 +718,7 @@ namespace RemCom
 			// Creates service on remote machine, if it's not installed yet
 			if (hService == NULL)
 			{
-				cout << "Creating service " << SERVICENAME << endl;
+				m_logger.logInfo("Creating service %s\n", SERVICENAME);
 				hService = ::CreateService(
 					hSCM, SERVICENAME, LONGSERVICENAME,
 					SERVICE_ALL_ACCESS,
@@ -723,15 +731,15 @@ namespace RemCom
 			if (hService == NULL)
 			{
 				::CloseServiceHandle(hSCM);
-				cerr << "Could not create service" << endl;
+				m_logger.logError("Could not create service");
 				return false;
 			}
 
 			// Start service
-			cout << "Starting service" << endl;
+			m_logger.logInfo("Starting service");
 			if (!StartService(hService, 0, NULL))
 			{
-				cerr << "Could not start service" << endl;
+				m_logger.logError("Could not start service");
 				return false;
 			}
 
@@ -762,7 +770,7 @@ namespace RemCom
 			// Connects to the remote service's communication pipe
 			while (dwRetry--)
 			{
-				cout << "Connecting to remote service communication pipe " << szPipeName << endl;
+				m_logger.logDebug("Connecting to remote service communication pipe %s", szPipeName);
 				if (WaitNamedPipe(szPipeName, 5000))
 				{
 					m_hCommandPipe = CreateFile(
@@ -778,7 +786,7 @@ namespace RemCom
 				}
 				else
 				{
-					cout << "Could not connect, waiting " << dwRetryTimeOut << " ms" << endl;
+					m_logger.logWarn("Could not connect, waiting %d ms", dwRetryTimeOut);
 					// Try Again
 					Sleep(dwRetryTimeOut);
 				}
@@ -1109,7 +1117,7 @@ namespace RemCom
 		bool executeRemoteCommand()
 		{
 			DWORD dwTemp = 0;
-			RemComMessage msg(BUFSIZ, &cerr);
+			RemComMessage msg(BUFSIZ, &m_logger);
 			RemComResponse response;
 
 			::ZeroMemory(&response, sizeof(response));
@@ -1117,29 +1125,29 @@ namespace RemCom
 			buildMessageStructure(&msg);
 
 			// Send message to service
-			cout << "Writing message to command pipe" << endl;
+			m_logger.logTrace("Writing message to command pipe");
 			if (!msg.send(m_hCommandPipe))
 			{
 				DWORD dwLastError = GetLastError();
-				cout << "\nCould not send command to remote service. Returned error code is " << DisplayableCode(dwLastError) << endl;
+				m_logger.logError("\nCould not send command to remote service. Returned error code is %s", DisplayableCode(dwLastError));
 				return false;
 			}
 
 			// Connects to remote pipes (stdout, stdin, stderr)
-			cout << "Connecting to remote process pipes" << endl;
+			m_logger.logTrace("Connecting to remote process pipes");
 			if (connectToRemotePipes(5, 1000))
 			{
 				// Waiting for response from service
-				cout << "Waiting for " << sizeof(response) << " response bytes" << endl;
+				m_logger.logTrace("Waiting for %d response bytes", sizeof(response));
 				ReadFile(m_hCommandPipe, &response, sizeof(response), &dwTemp, NULL);
 			}
 			else
-				cout << "Failed\n\n" << flush;
+				m_logger.logCritical("Failed to connect to remote process pipes");
 
 			if (response.dwErrorCode == 0)
-				cout << "\nRemote command returned " << DisplayableCode(response.dwReturnCode) << endl;
+				m_logger.logDebug("Remote command returned %s", DisplayableCode(response.dwReturnCode));
 			else
-				cout << "\nRemote command failed to start. Returned error code is " << DisplayableCode(response.dwErrorCode) << endl;
+				m_logger.logError("Remote command failed to start. Returned error code is %s", DisplayableCode(response.dwErrorCode));
 
 			return true;
 		}
@@ -1182,6 +1190,8 @@ namespace RemCom
 			     << " /c\t\t\tCopy the specified program to the remote machine's\n"
 			     << "   \t\t\t\"%SystemRoot%\\System32\" directory\n"
 			     << "   \t\t\tCommand's exe file must be absolute to local machine\n"
+				 << "\n"
+				 << " /v:[TRC|DBG|INF|ERR|CRT|FAT]\tVerbosity of log messages. Default is ERR\n"
 			     << "\n"
 			     << "   .........................................................................\n"
 			     << "\n"
@@ -1925,7 +1935,7 @@ namespace RemCom
 
 			if (!LogonUser((LPTSTR)m_lpszUser, (LPTSTR)m_lpszDomain, (LPTSTR)m_lpszPassword, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &hToken))
 			{
-				cout << "User Logon failed (" << GetLastError() << "." << endl;
+				m_logger.logFatal("User Logon failed (%d)", GetLastError());
 				//goto Cleanup;
 				showLastError();
 				return false;
@@ -1960,14 +1970,13 @@ namespace RemCom
 				&pi)           // Pointer to PROCESS_INFORMATION structure
 				)
 			{
-				cout << "CreateProcess failed (" << GetLastError() << ")." << endl;
+				m_logger.logFatal("CreateProcess failed (%d).", GetLastError());
 				showLastError();
-				cout << "User " << m_lpszUser << " Password " << m_lpszPassword << " Command " << szCmdline << flush;
 				return false;
 			}
 			else
 			{
-				cout << "User Impersonation Success" << flush;
+				m_logger.logDebug("User Impersonation Success");
 			}
 
 			// Wait until child process exits.
@@ -1989,14 +1998,13 @@ namespace RemCom
 
 		int runOnRemoteMachine()
 		{
-			cout << "Initiating Connection to Remote Service...  " << endl;
+			m_logger.logDebug("Initiating Connection to Remote Service...");
 			int rc = 0;
 			// Connect to remote machine's ADMIN$
 			if (!establishConnection(m_lpszMachine, "ADMIN$", true))
 			{
 				rc = -2;
-				cout << "Failed\n\n" << flush;
-				cerr << "Couldn't connect to " << m_lpszMachine << "\\ADMIN$\n";
+				m_logger.logError("Couldn't connect to %s\\ADMIN$\n", m_lpszMachine);
 				showLastError();
 				return rc;
 			}
@@ -2005,8 +2013,7 @@ namespace RemCom
 			if (!establishConnection(m_lpszMachine, "IPC$", true))
 			{
 				rc = -2;
-				cout << "Failed\n\n" << flush;
-				cerr << "Couldn't connect to " << m_lpszMachine << "\\IPC$\n";
+				m_logger.logError("Couldn't connect to %s\\IPC$\n", m_lpszMachine);
 				showLastError();
 				return rc;
 			}
@@ -2015,8 +2022,7 @@ namespace RemCom
 			if (!copyBinaryToRemoteSystem())
 			{
 				rc = -2;
-				cout << "Failed\n\n" << flush;
-				cerr << "Couldn't copy " << m_lpszCommandExe << " to " << m_lpszMachine << "\\ADMIN$\\System32\n";
+				m_logger.logError("Couldn't copy %s to \\ADMIN$\\System32", m_lpszCommandExe);
 				showLastError();
 				return rc;
 			}
@@ -2030,8 +2036,7 @@ namespace RemCom
 				if (!copyServiceToRemoteMachine())
 				{
 					rc = -2;
-					cout << "Failed\n\n" << flush;
-					cerr << "Couldn't copy service to " << m_lpszMachine << "\\ADMIN$\\System32\n";
+					m_logger.logError("Couldn't copy service to %s\\ADMIN$\\System32", m_lpszMachine);
 					showLastError();
 					return rc;
 				}
@@ -2040,8 +2045,7 @@ namespace RemCom
 				if (!installAndStartRemoteService())
 				{
 					rc = -2;
-					cout << "Failed\n\n" << flush;
-					cerr << "Couldn't start remote service\n";
+					m_logger.logError("Couldn't start remote service");
 					showLastError();
 					return rc;
 				}
@@ -2050,8 +2054,7 @@ namespace RemCom
 				if (!connectToRemoteService(5, 1000))
 				{
 					rc = -2;
-					cout << "Failed\n\n" << flush;
-					cerr << "Couldn't connect to remote service\n";
+					m_logger.logError("Couldn't connect to remote service");
 					showLastError();
 					return rc;
 				}
@@ -2070,7 +2073,7 @@ int _tmain(DWORD, TCHAR**, TCHAR**)
 {
 	try
 	{
-		RemCom::RemCom remcom = RemCom::RemCom();
+		RemCom::RemCom remcom;
 		return remcom.run();
 	}
 	catch(...)

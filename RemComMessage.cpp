@@ -7,16 +7,15 @@ namespace RemCom
 {
 	using namespace std;
 
-	RemComMessage::RemComMessage(DWORD dwReadBufferSize, std::ostream* debugLogStream) : m_dwReadBufferSize(dwReadBufferSize), m_debugLogStream(debugLogStream)
+	RemComMessage::RemComMessage(DWORD dwReadBufferSize, Logger* pLogger) : m_dwReadBufferSize(dwReadBufferSize), m_pLogger(pLogger)
 	{
-		ZeroMemory(&m_payload, sizeof(m_payload));
-		m_szLogBuffer = new char[LOG_BUFFER_SIZE];
+		::ZeroMemory(&m_payload, sizeof(m_payload));
 		m_readBuffer = new byte[m_dwReadBufferSize];
+		::ZeroMemory(m_readBuffer, m_dwReadBufferSize);
 	}
 
 	RemComMessage::~RemComMessage()
 	{
-		delete m_szLogBuffer;
 		delete m_readBuffer;
 	}
 
@@ -81,7 +80,7 @@ namespace RemCom
 
 	bool RemComMessage::receive(const HANDLE &pipe)
 	{
-		logDebug("Receiving message\n");
+		if (m_pLogger != NULL) m_pLogger->logDebug("Receiving message");
 		if (!receiveHeader(pipe))
 			return false;
 
@@ -99,7 +98,7 @@ namespace RemCom
 
 	bool RemComMessage::send(const HANDLE &pipe)
 	{
-		logDebug("Sending message\n");
+		if (m_pLogger != NULL) m_pLogger->logDebug("Sending message");
 		const string& command = m_command.str();
 		m_payload.dwCommandLength = command.length();
 
@@ -169,27 +168,27 @@ namespace RemCom
 
 	bool RemComMessage::readBytes(const HANDLE &pipe, LPVOID bytes, DWORD bytesToRead, const char* suffix)
 	{
-		logDebug("Reading %d %s\n", bytesToRead, suffix);
+		if (m_pLogger != NULL) m_pLogger->logDebug("Reading %d %s", bytesToRead, suffix);
 		DWORD totalBytesRead = 0;
 		::ZeroMemory(bytes, bytesToRead);
 		LPBYTE curPtr = (LPBYTE)bytes;
 		while (totalBytesRead < bytesToRead)
 		{
-			logDebug("Reading %d byte buffer\n", m_dwReadBufferSize);
+			if (m_pLogger != NULL) m_pLogger->logDebug("Reading %d byte buffer", m_dwReadBufferSize);
 			DWORD bytesRead = 0;
 			BOOL bSuccess = ReadFile(pipe, m_readBuffer, m_dwReadBufferSize, &bytesRead, NULL);
 			if (!bSuccess && GetLastError() != ERROR_MORE_DATA)
 				return false;
 			if (bytesRead > 0)
 			{
-				logDebug("Read %d byte(s)\n", bytesRead);
+				if (m_pLogger != NULL) m_pLogger->logDebug("Read %d byte(s)", bytesRead);
 				memcpy(curPtr, m_readBuffer, bytesRead);
 				curPtr += bytesRead;
 				totalBytesRead += bytesRead;
 			}
 			else
 			{
-				logDebug("Read completed without any bytes read");
+				if (m_pLogger != NULL) m_pLogger->logDebug("Read completed without any bytes read");
 			}
 		}
 		return true;
@@ -197,7 +196,7 @@ namespace RemCom
 
 	bool RemComMessage::writeBytes(const HANDLE &pipe, LPVOID bytes, DWORD bytesToWrite, const char* suffix)
 	{
-		logDebug("Writing %d %s\n", bytesToWrite, suffix);
+		if (m_pLogger != NULL) m_pLogger->logDebug("Writing %d %s", bytesToWrite, suffix);
 		DWORD totalBytesWritten = 0;
 		LPBYTE curPtr = (LPBYTE)bytes;
 		while (totalBytesWritten < bytesToWrite)
@@ -205,36 +204,25 @@ namespace RemCom
 			DWORD bytesToWriteThisTime = bytesToWrite - totalBytesWritten;
 			if (bytesToWriteThisTime > m_dwReadBufferSize)
 				bytesToWriteThisTime = m_dwReadBufferSize;
-			logDebug("Writing %d byte buffer\n", bytesToWriteThisTime);
+			if (m_pLogger != NULL) m_pLogger->logDebug("Writing %d byte buffer", bytesToWriteThisTime);
 			DWORD bytesWritten = 0;
 			if (!WriteFile(pipe, curPtr, bytesToWriteThisTime, &bytesWritten, NULL))
 				return false;
 			totalBytesWritten += bytesWritten;
 			curPtr += bytesWritten;
-			logDebug("Flushing buffers\n");
+			if (m_pLogger != NULL) m_pLogger->logDebug("Flushing buffers");
 			if (!FlushFileBuffers(pipe))
 			{
 				DWORD err = GetLastError();
-				logDebug("FlushFileBuffers failed, error code %d\n", err);
+				if (m_pLogger != NULL) m_pLogger->logDebug("FlushFileBuffers failed, error code %d", err);
 				SetLastError(err);
 				return false;
 			}
 			else
 			{
-				logDebug("Buffers flushed\n");
+				if (m_pLogger != NULL) m_pLogger->logDebug("Buffers flushed");
 			}
 		}
 		return true;
-	}
-
-	void RemComMessage::logDebug(const char* fmt, ...)
-	{
-		if (m_debugLogStream == NULL)
-			return;
-
-		va_list args;
-		va_start(args, fmt);
-		vsprintf_s(m_szLogBuffer, LOG_BUFFER_SIZE, fmt, args);
-		(*m_debugLogStream) << m_szLogBuffer;
 	}
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RemCom.h"
+#include "Logger.h"
 
 namespace RemCom
 {
@@ -17,7 +18,7 @@ namespace RemCom
 	class RemComMessage
 	{
 	public:
-		RemComMessage(DWORD dwReadBufferSize, std::ostream* debugLogStream);
+		RemComMessage(DWORD dwReadBufferSize, Logger* pLogger);
 		~RemComMessage();
 
 		RemComMessage& operator<<(const char* szString);
@@ -42,14 +43,11 @@ namespace RemCom
 		void createPipeName(const char* baseName, std::string& pipeName);
 
 	private:
-		std::ostream* m_debugLogStream;
+		Logger* m_pLogger;
 		RemComMessagePayload m_payload;
 		std::stringstream m_command;
-		char* m_szLogBuffer;
 		DWORD m_dwReadBufferSize;
 		LPBYTE m_readBuffer;
-
-		void logDebug(const char* fmt, ...);
 
 		bool readAck(const HANDLE &pipe);
 		bool receiveCommandText(const HANDLE &pipe);
