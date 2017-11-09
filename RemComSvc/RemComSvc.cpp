@@ -135,28 +135,8 @@ namespace RemCom
 			// Increment instance counter 
 			InterlockedIncrement(&s_dwSvcPipeInstanceCount);
 
-			WaitForMessageThenProcess();
+			::ZeroMemory(&response, sizeof(response));
 
-			DisconnectNamedPipe(m_hCommPipe);
-			CloseHandle(m_hCommPipe);
-
-			// Decrement instance counter 
-			InterlockedDecrement(&dwSvcPipeInstanceCount);
-		}
-
-		void WaitForMessageThenProcess()
-		{
-			RemComMessage msg;
-			WaitForMessageFromClient(msg);
-
-			RemComResponse response;
-			ProcessMessage(msg, response);
-
-			WriteEventLog("Command execution finished");
-		}
-
-		void WaitForMessageFromClient(RemCom::RemComMessage &msg)
-		{
 			// Waiting for communication message from client
 			m_pLogger->logDebug("Waiting for client message");
 			if (!msg.receive(m_hCommPipe))
@@ -170,17 +150,11 @@ namespace RemCom
 				m_pLogger->logDebug(msg.getCommand(command).c_str());
 			}
 
-			WriteEventLog(string(msg.szCommand));
-		}
-
-		void ProcessMessage(RemComMessage& msg, RemComResponse& response)
-		{
 			// Execute the requested command
 			response.dwErrorCode = execute(&msg, &response.dwReturnCode);
 			m_pLogger->logDebug("Returned from execute, writing %d response bytes", sizeof(response));
 
 			// Send back the response message (client is waiting for this response)
-			DWORD dwWritten;
 			if (!WriteFile(m_hCommPipe, &response, sizeof(response), &dwWritten, NULL) || dwWritten == 0)
 			{
 				writeLastError("Could not write response to client");

@@ -683,7 +683,7 @@ namespace RemCom
 			// Copy binary file from resources to \\remote\ADMIN$\System32
 			m_logger.logInfo("Creating service file %s", strSvcExePath.c_str());
 			HANDLE hFileSvcExecutable = CreateFile(
-				szSvcExePath,
+				strSvcExePath.c_str(),
 				GENERIC_WRITE,
 				0,
 				NULL,
@@ -698,8 +698,6 @@ namespace RemCom
 			WriteFile(hFileSvcExecutable, pSvcExecutable, dwSvcExecutableSize, &dwWritten, NULL);
 
 			CloseHandle(hFileSvcExecutable);
-
-			cout << "Wrote " << dwWritten << " bytes service executable to " << szSvcExePath << endl;
 
 			return dwWritten == dwSvcExecutableSize;
 		}
@@ -718,7 +716,6 @@ namespace RemCom
 			SC_HANDLE hService = ::OpenService(hSCM, SERVICENAME, SERVICE_ALL_ACCESS);
 
 			// Creates service on remote machine, if it's not installed yet
-			const char* szBinPath = SYSTEM32 "\\" RemComSVCEXE;
 			if (hService == NULL)
 			{
 				m_logger.logInfo("Creating service %s\n", SERVICENAME);
@@ -727,7 +724,7 @@ namespace RemCom
 					SERVICE_ALL_ACCESS,
 					SERVICE_WIN32_OWN_PROCESS,
 					SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
-					szBinPath,
+					SYSTEM32 "\\" RemComSVCEXE,
 					NULL, NULL, NULL, NULL, NULL);
 			}
 
@@ -737,8 +734,6 @@ namespace RemCom
 				m_logger.logError("Could not create service");
 				return false;
 			}
-
-			cout << "Created " << SERVICENAME << " service on " << m_lpszMachine << " with binPath=" << szBinPath << endl;
 
 			// Start service
 			m_logger.logInfo("Starting service");
@@ -1137,7 +1132,6 @@ namespace RemCom
 				m_logger.logError("\nCould not send command to remote service. Returned error code is %s", DisplayableCode(dwLastError));
 				return false;
 			}
-			cout << "Wrote " << dwTemp << " bytes to remote service on command pipe";
 
 			// Connects to remote pipes (stdout, stdin, stderr)
 			m_logger.logTrace("Connecting to remote process pipes");

@@ -140,11 +140,6 @@
   <ItemGroup>
     <ClInclude Include="RemComSvc.h" />
   </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\RemComCommon\RemComCommon.vcxproj">
-      <Project>{c6c7f424-fafb-4cf1-965b-2c0613b89507}</Project>
-    </ProjectReference>
-  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

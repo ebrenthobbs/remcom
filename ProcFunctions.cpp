@@ -44,7 +44,9 @@ void DisplayError(LPWSTR pszAPI)
 
 void CreatProc(int argc, WCHAR *argv[])
 {
+    DWORD     dwSize;
     HANDLE    hToken;
+    LPVOID    lpvEnv;
     PROCESS_INFORMATION pi = {0};
     STARTUPINFO         si = {0};
     WCHAR               szUserProfile[256] = L"";
