@@ -27,6 +27,7 @@
  */
 
 #include <windows.h>
+#include <atlbase.h>
 #include <tchar.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -90,6 +91,42 @@ namespace RemCom
 		{
 			string strPrefix = szPrefix;
 			return writeLastError(strPrefix);
+		}
+
+		bool launchDebugger()
+		{
+			// Get System directory, typically c:\windows\system32
+			std::wstring systemDir(MAX_PATH + 1, '\0');
+			UINT nChars = GetSystemDirectoryW(&systemDir[0], systemDir.length());
+			if (nChars == 0) return false; // failed to get system directory
+			systemDir.resize(nChars);
+
+			// Get process ID and create the command line
+			DWORD pid = GetCurrentProcessId();
+			std::wostringstream s;
+			s << systemDir << L"\\vsjitdebugger.exe -p " << pid;
+			std::wstring cmdLine = s.str();
+
+			// Start debugger process
+			STARTUPINFOW si;
+			ZeroMemory(&si, sizeof(si));
+			si.cb = sizeof(si);
+
+			PROCESS_INFORMATION pi;
+			ZeroMemory(&pi, sizeof(pi));
+
+			if (!CreateProcessW(NULL, &cmdLine[0], NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) return false;
+
+			// Close debugger process handles to eliminate resource leak
+			CloseHandle(pi.hThread);
+			CloseHandle(pi.hProcess);
+
+			// Wait for the debugger to attach
+			while (!IsDebuggerPresent()) Sleep(100);
+
+			// Stop execution so the debugger can take over
+			DebugBreak();
+			return true;
 		}
 
 	private:
@@ -177,8 +214,113 @@ namespace RemCom
 			m_shutdownCallback();
 		}
 
+		bool createProcessIoPipes(RemComMessage* pMsg, LPSTARTUPINFOW psi)
+		{
+			SECURITY_ATTRIBUTES SecAttrib = { 0 };
+			SECURITY_DESCRIPTOR SecDesc;
+
+			InitializeSecurityDescriptor(&SecDesc, SECURITY_DESCRIPTOR_REVISION);
+			SetSecurityDescriptorDacl(&SecDesc, TRUE, NULL, FALSE);
+
+			SecAttrib.nLength = sizeof(SECURITY_ATTRIBUTES);
+			SecAttrib.lpSecurityDescriptor = &SecDesc;;
+			SecAttrib.bInheritHandle = TRUE;
+
+			psi->dwFlags |= STARTF_USESTDHANDLES;
+			psi->hStdOutput = INVALID_HANDLE_VALUE;
+			psi->hStdInput = INVALID_HANDLE_VALUE;
+			psi->hStdError = INVALID_HANDLE_VALUE;
+
+			string strStdOut, strStdIn, strStdErr;
+			pMsg->createPipeName(RemComSTDOUT, strStdOut);
+			pMsg->createPipeName(RemComSTDIN, strStdIn);
+			pMsg->createPipeName(RemComSTDERR, strStdErr);
+			const char* szStdOut = strStdOut.c_str();
+			const char* szStdIn = strStdIn.c_str();
+			const char* szStdErr = strStdErr.c_str();
+
+			m_pLogger->logDebug("Creating named pipes for remote caller: "
+				" stdin=%s"
+				" stdout=%s"
+				" stderr=%s", szStdIn, szStdOut, szStdErr);
+
+			// Create StdOut pipe
+			psi->hStdOutput = CreateNamedPipe(
+				szStdOut,
+				PIPE_ACCESS_OUTBOUND,
+				PIPE_TYPE_MESSAGE | PIPE_WAIT,
+				PIPE_UNLIMITED_INSTANCES,
+				0,
+				0,
+				(DWORD)-1,
+				&SecAttrib);
+			checkPipeCreationError(psi->hStdOutput, szStdOut);
+
+			// Create StdError pipe
+			psi->hStdError = CreateNamedPipe(
+				szStdErr,
+				PIPE_ACCESS_OUTBOUND,
+				PIPE_TYPE_MESSAGE | PIPE_WAIT,
+				PIPE_UNLIMITED_INSTANCES,
+				0,
+				0,
+				(DWORD)-1,
+				&SecAttrib);
+			checkPipeCreationError(psi->hStdError, szStdErr);
+
+			// Create StdIn pipe
+			psi->hStdInput = CreateNamedPipe(
+				szStdIn,
+				PIPE_ACCESS_INBOUND,
+				PIPE_TYPE_MESSAGE | PIPE_WAIT,
+				PIPE_UNLIMITED_INSTANCES,
+				0,
+				0,
+				(DWORD)-1,
+				&SecAttrib);
+			checkPipeCreationError(psi->hStdInput, szStdIn);
+
+			if (psi->hStdOutput == INVALID_HANDLE_VALUE ||
+				psi->hStdError == INVALID_HANDLE_VALUE ||
+				psi->hStdInput == INVALID_HANDLE_VALUE)
+			{
+				CloseHandle(psi->hStdOutput);
+				CloseHandle(psi->hStdError);
+				CloseHandle(psi->hStdInput);
+
+				return false;
+			}
+
+			// Waiting for client to connect to this pipe
+			if (!connectIoPipe(psi->hStdOutput, "stdout"))
+				return false;
+			if (!connectIoPipe(psi->hStdInput, "stdin"))
+				return false;
+			if (!connectIoPipe(psi->hStdError, "stderr"))
+				return false;
+
+			return true;
+		}
+
+		bool connectIoPipe(HANDLE hPipe, LPCTSTR pipeName)
+		{
+			if (!ConnectNamedPipe(hPipe, NULL))
+			{
+				DWORD err = GetLastError();
+				if (err != ERROR_PIPE_CONNECTED)
+				{
+					stringstream strMessage;
+					strMessage << "Error connecting client to " << pipeName << " pipe";
+					writeLastError(strMessage.str());
+					return false;
+				}
+			}
+			m_pLogger->logDebug("Client connected to %s pipe", pipeName);
+			return true;
+		}
+
 		// Creates named pipes for stdout, stderr, stdin
-		bool createProcessIoPipes(RemComMessage* pMsg, STARTUPINFO* psi)
+		bool createProcessIoPipes(RemComMessage* pMsg, LPSTARTUPINFO psi)
 		{
 			SECURITY_ATTRIBUTES SecAttrib = { 0 };
 			SECURITY_DESCRIPTOR SecDesc;
@@ -275,6 +417,244 @@ namespace RemCom
 		// Execute the requested client command
 		DWORD execute(RemComMessage* pMsg, DWORD* pReturnCode)
 		{
+			HANDLE hProcess;
+			if (false)
+				hProcess = createProcessAnonymously(pMsg, pReturnCode);
+			else
+				hProcess = createProcessWithLogon(pMsg, pReturnCode);
+
+			if (hProcess == INVALID_HANDLE_VALUE)
+				return *pReturnCode;
+
+			*pReturnCode = 0;
+
+			// Wait for process to terminate
+			if (pMsg->shouldWait())
+			{
+				m_pLogger->logDebug("Waiting for process to terminate");
+				WaitForSingleObject(hProcess, INFINITE);
+				m_pLogger->logDebug("Process terminated");
+				GetExitCodeProcess(hProcess, pReturnCode);
+				stringstream stdMessage;
+				m_pLogger->logDebug("Exit code = %d", *pReturnCode);
+			}
+			else
+			{
+				m_pLogger->logDebug("NOT waiting for process to terminate");
+			}
+
+			return 0;
+		}
+
+#define MAXUSERNAME 104
+#define MAXDOMAINNAME 253
+#define DOMAIN_USER_DELIMITER "\\"
+
+		LPTSTR createCommandLine(RemComMessage* pMsg)
+		{
+			string command;
+			pMsg->getCommand(command);
+			size_t bufferSize = command.length() + 40;
+			LPTSTR szCommand = new TCHAR[bufferSize];
+			sprintf_s(szCommand, bufferSize, "cmd.exe /q /c \"%s\"", command.c_str());
+			return szCommand;
+		}
+
+		HANDLE createProcessWithLogon(RemComMessage* pMsg, DWORD* pReturnCode)
+		{
+			USES_CONVERSION;
+			DWORD dwCreationFlags = 0;
+			TCHAR szUserNameBuffer[MAXUSERNAME+MAXDOMAINNAME+2];
+			LPCTSTR szUserName = pMsg->getUser();
+			strncpy_s(szUserNameBuffer, sizeof(szUserNameBuffer) / sizeof(TCHAR) - 1, szUserName, strlen(szUserName));
+			LPCTSTR szDomain;
+			TCHAR* nextToken = NULL;
+			if ((szDomain = _tcstok_s(szUserNameBuffer, DOMAIN_USER_DELIMITER, &nextToken)) != NULL)
+				szUserName = _tcstok_s(NULL, DOMAIN_USER_DELIMITER, &nextToken);
+			LPCWSTR wszDomain = szDomain == NULL ? NULL : T2W(szDomain);
+			LPCWSTR wszUser = T2W(szUserName);
+			LPCWSTR wszPassword = T2W(pMsg->getPassword());
+			DWORD dwLogonFlags = LOGON_NETCREDENTIALS_ONLY;// pMsg->getLogonFlags();
+			LPTSTR szCommandLine = createCommandLine(pMsg);
+			LPWSTR wszCommandLine = T2W(szCommandLine);
+			LPCTSTR szWorkingDir = pMsg->getWorkingDirectory();
+			szWorkingDir = szWorkingDir[0] != _T('\0') ? szWorkingDir : NULL;
+			LPCWSTR wszCurrentDir = szWorkingDir == NULL ? NULL : T2W(szWorkingDir);
+			STARTUPINFOW startupInfo;
+			::ZeroMemory(&startupInfo, sizeof(startupInfo));
+			startupInfo.cb = sizeof(startupInfo);
+			PROCESS_INFORMATION processInfo;
+			LPCWSTR wszApplicationName = NULL;
+			LPVOID lpEnvironment = NULL;
+
+			// Create named pipes for stdout, stdin, stderr
+			// Client will sit on these pipes
+			if (!createProcessIoPipes(pMsg, &startupInfo))
+			{
+				*pReturnCode = 2;
+				return INVALID_HANDLE_VALUE;
+			}
+
+			// Start the requested process
+			if (
+				CreateProcessWithLogonW(
+					wszUser,			// lpUsername
+					wszDomain,			// lpDomain
+					wszPassword,		// lpPassword
+					dwLogonFlags,		// dwLogonFlags
+					wszApplicationName,	// lpApplicationName
+					wszCommandLine,		// lpCommandLine
+					dwCreationFlags,	// dwCreationFlags
+					lpEnvironment,		// lpEnvironment
+					wszCurrentDir,		// lpCurrentDirectory
+					&startupInfo,		// lpStartupInfo
+					&processInfo))		// lpProcessInformation
+			{
+				*pReturnCode = 0;
+				delete szCommandLine;
+				return processInfo.hProcess;
+			}
+			else
+			{
+				writeLastError("Error creating process");
+				m_pLogger->logError("Process creation parameters:\n"
+					"  lpUsername=%s\n"
+					"  lpDomain=%s\n"
+					"  lpPassword=%s\n"
+					"  dwLogonFlags=%s\n"
+					"  lpApplicationName=%s\n"
+					"  lpCommandLine=%s\n"
+					"  dwCreationFlags=%s\n"
+					"  lpEnvironment=%s\n"
+					"  lpCurrentDirectory=%s\n"
+					"  lpStartupInfo=%s\n"
+					, display(wszUser).c_str()
+					, display(wszDomain).c_str()
+					, display(wszPassword).c_str()
+					, displayLogonFlags(dwLogonFlags).c_str()
+					, display(wszApplicationName).c_str()
+					, display(wszCommandLine, 256).c_str()
+					, displayCreationFlags(dwCreationFlags).c_str()
+					, "NULL" //lpEnvironment
+					, display(wszCurrentDir).c_str()
+					, display(startupInfo).c_str()
+				);
+				*pReturnCode = 1;
+				delete szCommandLine;
+				return INVALID_HANDLE_VALUE;
+			}
+		}
+
+		static void appendFlag(string& str, DWORD flags, DWORD bit, LPCTSTR flagName)
+		{
+			if (flags & bit)
+			{
+				if (str.length() > 0)
+					str += "|";
+				str += flagName;
+			}
+		}
+
+		static const string displayCreationFlags(DWORD flags)
+		{
+			TCHAR fmtBuf[16];
+			string str;
+			str += displayHexInt(flags, fmtBuf);
+			str += "(";
+			string flagStr;
+			appendFlag(flagStr, flags, CREATE_DEFAULT_ERROR_MODE, "CREATE_DEFAULT_ERROR_MODE");
+			appendFlag(flagStr, flags, CREATE_NEW_CONSOLE, "CREATE_NEW_CONSOLE");
+			appendFlag(flagStr, flags, CREATE_NEW_PROCESS_GROUP, "CREATE_NEW_PROCESS_GROUP");
+			appendFlag(flagStr, flags, CREATE_SEPARATE_WOW_VDM, "CREATE_SEPARATE_WOW_VDM");
+			appendFlag(flagStr, flags, CREATE_SUSPENDED, "CREATE_SUSPENDED");
+			appendFlag(flagStr, flags, CREATE_UNICODE_ENVIRONMENT, "CREATE_UNICODE_ENVIRONMENT");
+			str += flagStr;
+			str += ")";
+			return str;
+		}
+
+		static const string displayLogonFlags(DWORD flags)
+		{
+			TCHAR fmtBuf[16];
+			string str;
+			str += displayHexInt(flags, fmtBuf);
+			str += "(";
+			string flagStr;
+			appendFlag(flagStr, flags, LOGON_WITH_PROFILE, "LOGON_WITH_PROFILE");
+			appendFlag(flagStr, flags, LOGON_NETCREDENTIALS_ONLY, "LOGON_NETCREDENTIALS_ONLY");
+			str += flagStr;
+			str += ")";
+			return str;
+		}
+
+#define MAX_DISPLAY_STRING 32768
+		static const string display(LPCWSTR value)
+		{
+			return display(value, MAX_DISPLAY_STRING);
+		}
+
+		static const string display(LPCWSTR value, size_t maxLength)
+		{
+			USES_CONVERSION;
+			return display(W2T(value), maxLength);
+		}
+
+		static const string display(LPSTR value)
+		{
+			return display(value, MAX_DISPLAY_STRING);
+		}
+
+		static const string display(LPSTR value, size_t maxLength)
+		{
+			string str;
+			if (value == NULL)
+			{
+				str += "NULL";
+			}
+			else
+			{
+				str += "\"";
+				str += value;
+				if (str.length() > maxLength + 1)
+					str = str.substr(0, maxLength + 1);
+				str += "\"";
+			}
+			return str;
+		}
+
+		static const string display(const STARTUPINFOW& startupInfo)
+		{
+			USES_CONVERSION;
+			TCHAR fmtBuf[256];
+			stringstream s;
+			s << "{";
+			s << "\n    cb: " << startupInfo.cb << ",";
+			s << "\n    cbReserved2: " << startupInfo.cbReserved2 << ",";
+			s << "\n    dwFillAttribute: " << displayHexInt(startupInfo.dwFillAttribute, fmtBuf) << ",";
+			s << "\n    dwFlags: " << displayHexInt(startupInfo.dwFlags, fmtBuf) << ",";
+			s << "\n    dwX: " << startupInfo.dwX << ",";
+			s << "\n    dwXCountChars: " << startupInfo.dwXCountChars << ",";
+			s << "\n    dwXSize: " << startupInfo.dwXSize << ",";
+			s << "\n    dwY: " << startupInfo.dwY << ",";
+			s << "\n    dwYCountChars: " << startupInfo.dwYCountChars << ",";
+			s << "\n    dwYSize: " << startupInfo.dwYSize << ",";
+			s << "\n    hStdError: " << displayHexInt((LONG)startupInfo.hStdError, fmtBuf) << ",";
+			s << "\n    hStdInput: " << displayHexInt((LONG)startupInfo.hStdInput, fmtBuf) << ",";
+			s << "\n    hStdOutput: " << displayHexInt((LONG)startupInfo.hStdOutput, fmtBuf) << ",";
+			s << "\n    lpTitle: " << display(startupInfo.lpTitle) << ",";
+			s << "\n    wShowWindow: " << startupInfo.wShowWindow << ",";
+			s << "\n  }";
+			return s.str();
+		}
+
+		static LPCTSTR displayHexInt(LONG value, LPTSTR buf)
+		{
+			_stprintf_s(buf, 16, "0x%08X", value);
+			return buf;
+		}
+
+		HANDLE createProcessAnonymously(RemComMessage* pMsg, DWORD* pReturnCode)
+		{
 			DWORD rc;
 			PROCESS_INFORMATION pi;
 			STARTUPINFO si;
@@ -285,60 +665,36 @@ namespace RemCom
 			// Create named pipes for stdout, stdin, stderr
 			// Client will sit on these pipes
 			if (!createProcessIoPipes(pMsg, &si))
-				return 2;
+			{
+				*pReturnCode = 2;
+				return INVALID_HANDLE_VALUE;
+			}
 
 			*pReturnCode = 0;
 			rc = 0;
-
-			// Initialize command
-			// cmd.exe /c /q allows us to execute internal dos commands too.
-			string command;
-			pMsg->getCommand(command);
-			size_t bufferSize = command.length() + 40;
-			LPTSTR szCommand = new TCHAR[bufferSize];
-			sprintf_s(szCommand, bufferSize, "cmd.exe /q /c \"%s\"", command.c_str());
+			LPTSTR szCommand = createCommandLine(pMsg);
 			LPCTSTR szWorkingDir = pMsg->getWorkingDirectory();
-			
-			// Start the requested process
-			if (CreateProcess(
-				NULL,
-				szCommand,
-				NULL,
-				NULL,
-				TRUE,
-				pMsg->getPriority() | CREATE_NO_WINDOW,
-				NULL,
-				szWorkingDir[0] != _T('\0') ? szWorkingDir : NULL,
-				&si,
-				&pi))
-			{	
-				HANDLE hProcess = pi.hProcess;
-
-				*pReturnCode = 0;
-
-				// Wait for process to terminate
-				if (pMsg->shouldWait())
-				{
-					m_pLogger->logDebug("Waiting for process to terminate");
-					WaitForSingleObject(hProcess, INFINITE);
-					m_pLogger->logDebug("Process terminated");
-					GetExitCodeProcess(hProcess, pReturnCode);
-					stringstream stdMessage;
-					m_pLogger->logDebug("Exit code = %d", *pReturnCode);
-				}
-				else
-				{
-					m_pLogger->logDebug("NOT waiting for process to terminate");
-				}
-			}
-			else
+			szWorkingDir = szWorkingDir[0] != _T('\0') ? szWorkingDir : NULL;
+			DWORD dwPriority = pMsg->getPriority() | CREATE_NO_WINDOW;
+			if (!CreateProcess(
+				NULL,			// lpApplicationName
+				szCommand,		// lpCommandLine
+				NULL,			// lpProcessAttributes
+				NULL,			// lpThreadAttributes
+				TRUE,			// bInheritHandles	
+				dwPriority,		// dwCreationFlags
+				NULL,			// lpEnvironment
+				szWorkingDir,	// lpCurrentDirectory
+				&si,			// lpStartupInfo
+				&pi))			// lpProcessInformation
 			{
-				writeLastError("Error creating process");
-				rc = 1;
+				delete szCommand;
+				*pReturnCode = 1;
+				return INVALID_HANDLE_VALUE;
 			}
-
 			delete szCommand;
-			return rc;
+			*pReturnCode = 0;
+			return INVALID_HANDLE_VALUE;
 		}
 	};
 
@@ -349,13 +705,11 @@ namespace RemCom
 	public:
 		Service()
 		{
-
 		}
 
 		void start()
 		{
-			m_logStream.open("c:\\temp\\remcomsvc.log", ios_base::out | ios_base::in | ios_base::app);
-			m_pLogger = new Logger(m_logStream, LogLevel::Debug, LOG_BUFFER_SIZE);
+			initLogger();
 
 			// Start CommunicationPoolThread, which handles the incoming instances
 			_beginthread(RemCom::Service::CommunicationPoolThread, 0, this);
@@ -371,6 +725,71 @@ namespace RemCom
 		ofstream m_logStream;
 		vector<ClientInstance*> m_clientInstances;
 		mutex m_clientMutex;
+
+		void initLogger()
+		{
+			USES_CONVERSION;
+			launchDebugger();
+			LPCTSTR szRegistryKey = "Software\\Arxscan\\RemComSvc";
+			HKEY hRegKey;
+			bool logConfigured = false;
+			LONG rc = RegOpenKeyEx(HKEY_LOCAL_MACHINE, szRegistryKey, 0, KEY_READ, &hRegKey);
+			if (rc == ERROR_SUCCESS)
+			{
+				wstring strLogFilePath;
+				if (getStringRegKey(hRegKey, L"LogFilePath", strLogFilePath, L"") == ERROR_SUCCESS)
+				{
+					LogLevel minLogLevel = lookupMinLogLevel(hRegKey);
+					char* szLogFilePath = W2A(strLogFilePath.c_str());
+					m_logStream.open(szLogFilePath, ios_base::out | ios_base::in | ios_base::app);
+					m_pLogger = new Logger(&m_logStream, minLogLevel, LOG_BUFFER_SIZE);
+					logConfigured = true;
+				}
+			}
+			if (!logConfigured) // create a null logger
+			{
+				m_pLogger = new Logger(NULL, LogLevel::Fatal, LOG_BUFFER_SIZE);
+			}
+		}
+
+		LogLevel lookupMinLogLevel(HKEY hKey)
+		{
+			LogLevel minLogLevel = LogLevel::Error;
+			wstring strMinLogLevel;
+			if (getStringRegKey(hKey, L"MinLogLevel", strMinLogLevel, L"") == ERROR_SUCCESS)
+			{
+				const wchar_t* wszMinLogLevel = strMinLogLevel.c_str();
+				if (_wcsicmp(wszMinLogLevel, L"trc") == 0 || _wcsicmp(wszMinLogLevel, L"trace") == 0)
+					minLogLevel = LogLevel::Trace;
+				else if (_wcsicmp(wszMinLogLevel, L"dbg") == 0 || _wcsicmp(wszMinLogLevel, L"debug") == 0)
+					minLogLevel = LogLevel::Debug;
+				else if (_wcsicmp(wszMinLogLevel, L"inf") == 0 || _wcsicmp(wszMinLogLevel, L"info") == 0)
+					minLogLevel = LogLevel::Info;
+				else if (_wcsicmp(wszMinLogLevel, L"wrn") == 0 || _wcsicmp(wszMinLogLevel, L"warn") == 0)
+					minLogLevel = LogLevel::Warn;
+				else if (_wcsicmp(wszMinLogLevel, L"err") == 0 || _wcsicmp(wszMinLogLevel, L"error") == 0)
+					minLogLevel = LogLevel::Error;
+				else if (_wcsicmp(wszMinLogLevel, L"crt") == 0 || _wcsicmp(wszMinLogLevel, L"critical") == 0)
+					minLogLevel = LogLevel::Critical;
+				else if (_wcsicmp(wszMinLogLevel, L"fat") == 0 || _wcsicmp(wszMinLogLevel, L"fatal") == 0)
+					minLogLevel = LogLevel::Fatal;
+			}
+			return minLogLevel;
+		}
+
+		LONG getStringRegKey(HKEY hKey, const std::wstring &strValueName, std::wstring &strValue, const std::wstring &strDefaultValue)
+		{
+			strValue = strDefaultValue;
+			WCHAR szBuffer[512];
+			DWORD dwBufferSize = sizeof(szBuffer);
+			ULONG nError;
+			nError = RegQueryValueExW(hKey, strValueName.c_str(), 0, NULL, (LPBYTE)szBuffer, &dwBufferSize);
+			if (ERROR_SUCCESS == nError)
+			{
+				strValue = szBuffer;
+			}
+			return nError;
+		}
 
 		static void CommunicationPoolThread(PVOID pThis)
 		{

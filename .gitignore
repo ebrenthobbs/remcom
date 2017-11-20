@@ -4,3 +4,4 @@ ProcComs/Release/
 Release/
 RemComSvc/Release/
 bin/
+/RemComSvc/RemComSvc.vcxproj.user

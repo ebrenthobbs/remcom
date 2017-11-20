@@ -38,6 +38,16 @@ namespace RemCom
 		return command;
 	}
 
+	DWORD RemComMessage::getLogonFlags()
+	{
+		return m_payload.dwLogonFlags;
+	}
+
+	void RemComMessage::setLogonFlags(DWORD logonFlags)
+	{
+		m_payload.dwLogonFlags = logonFlags;
+	}
+
 	void RemComMessage::setMachine(LPCTSTR machine)
 	{
 		strncpy_s(m_payload.szMachine, sizeof(m_payload.szMachine) / sizeof(TCHAR) - 1, machine, strlen(machine));
@@ -53,6 +63,21 @@ namespace RemCom
 		return !m_payload.bNoWait;
 	}
 
+	LPCTSTR RemComMessage::getPassword()
+	{
+		return m_payload.szPassword;
+	}
+
+	void RemComMessage::setPassword(LPCTSTR password)
+	{
+		if (password == NULL)
+		{
+			::ZeroMemory(m_payload.szPassword, sizeof(m_payload.szPassword));
+			return;
+		}
+		strncpy_s(m_payload.szPassword, sizeof(m_payload.szPassword) / sizeof(TCHAR) - 1, password, strlen(password));
+	}
+
 	DWORD RemComMessage::getPriority()
 	{
 		return m_payload.dwPriority;
@@ -66,6 +91,21 @@ namespace RemCom
 	void RemComMessage::setProcessId(DWORD processId)
 	{
 		m_payload.dwProcessId = processId;
+	}
+
+	LPCTSTR RemComMessage::getUser()
+	{
+		return m_payload.szUser;
+	}
+
+	void RemComMessage::setUser(LPCTSTR user)
+	{
+		if (user == NULL)
+		{
+			::ZeroMemory(m_payload.szUser, sizeof(m_payload.szUser));
+			return;
+		}
+		strncpy_s(m_payload.szUser, sizeof(m_payload.szUser) / sizeof(TCHAR) - 1, user, strlen(user));
 	}
 
 	LPCTSTR RemComMessage::getWorkingDirectory()

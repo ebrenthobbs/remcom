@@ -21,7 +21,7 @@ namespace RemCom
 	class Logger
 	{
 	public:
-		Logger(ostream& logStream, LogLevel minLogLevel, size_t bufferSize) : m_logStream(logStream), m_minLogLevel(minLogLevel), m_logBufferSize(bufferSize)
+		Logger(ostream* pLogStream, LogLevel minLogLevel, size_t bufferSize) : m_pLogStream(pLogStream), m_minLogLevel(minLogLevel), m_logBufferSize(bufferSize)
 		{
 			m_logBuffer = new char[m_logBufferSize];
 		}
@@ -143,21 +143,23 @@ namespace RemCom
 	private:
 		size_t m_logBufferSize;
 		char* m_logBuffer;
-		ostream& m_logStream;
+		ostream* m_pLogStream;
 		LogLevel m_minLogLevel;
 
 		mutex logMutex;
 
 		void logImpl(LogLevel logLevel, const char* fmt, va_list args)
 		{
+			if (m_pLogStream == NULL)
+				return;
 			logMutex.lock();
 			::ZeroMemory(m_logBuffer, m_logBufferSize);
 			int len = vsprintf_s(m_logBuffer, m_logBufferSize, fmt, args);
-			m_logStream << code(logLevel) << ": ";
-			m_logStream << m_logBuffer;
+			(*m_pLogStream) << code(logLevel) << ": ";
+			(*m_pLogStream) << m_logBuffer;
 			if (m_logBuffer[len - 1] != '\n')
-				m_logStream << '\n';
-			m_logStream << flush;
+				(*m_pLogStream) << '\n';
+			(*m_pLogStream) << flush;
 			logMutex.unlock();
 		}
 

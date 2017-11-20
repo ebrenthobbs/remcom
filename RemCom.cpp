@@ -68,7 +68,7 @@ namespace RemCom
 	class RemCom
 	{
 	public:
-		RemCom() : m_logger(cerr, LogLevel::Error, LOG_BUFFER_SIZE)
+		RemCom() : m_logger(&cerr, LogLevel::Error, LOG_BUFFER_SIZE)
 		{
 		}
 
@@ -502,57 +502,62 @@ namespace RemCom
 			return true;
 		}
 
-		// Establish Connection to Remote Machine
-		bool establishConnection(LPCTSTR lpszRemote, LPCTSTR lpszResource, bool bEstablish)
+		string resourcePath(LPCTSTR lpszRemote, LPCTSTR lpszResource)
 		{
 			// Remote resource, \\remote\ipc$, remote\admin$, ...
 			stringstream strRemoteResource;
 			strRemoteResource << lpszRemote << "\\" << lpszResource;
-			auto str = strRemoteResource.str();
-			auto c_str = str.c_str();
-			LPTSTR szRemoteResource = const_cast<LPTSTR>(c_str);
+			return strRemoteResource.str();
+		}
 
-			//
-			// disconnect or connect to the resource, based on bEstablish
-			//
-			DWORD rc;
+		// Establish Connection to Remote Machine
+		bool connectToRemoteResource(LPCTSTR lpszRemote, LPCTSTR lpszResource)
+		{
+			string remoteResource = resourcePath(lpszRemote, lpszResource);
 
-			if (bEstablish)
+			NETRESOURCE nr;
+			nr.dwType = RESOURCETYPE_ANY;
+			nr.lpLocalName = NULL;
+			nr.lpRemoteName = const_cast<LPTSTR>(remoteResource.c_str());
+			nr.lpProvider = NULL;
+
+			//Establish connection (using username/pwd)
+			m_logger.logInfo("Establishing connection to %s", remoteResource.c_str());
+			DWORD rc = WNetAddConnection2(&nr, m_lpszPassword, m_lpszUser, FALSE);
+
+			switch (rc)
 			{
-				NETRESOURCE nr;
-				nr.dwType = RESOURCETYPE_ANY;
-				nr.lpLocalName = NULL;
-				nr.lpRemoteName = szRemoteResource;
-				nr.lpProvider = NULL;
-
-				//Establish connection (using username/pwd)
-				m_logger.logInfo("Establishing connection to %s", szRemoteResource);
-				rc = WNetAddConnection2(&nr, m_lpszPassword, m_lpszUser, FALSE);
-
-				switch (rc)
+			case ERROR_ACCESS_DENIED:
+			case ERROR_INVALID_PASSWORD:
+			case ERROR_LOGON_FAILURE:
+			case ERROR_SESSION_CREDENTIAL_CONFLICT:
+				// Prompt for password if the default(NULL) was not good
+				if (m_lpszUser != NULL && m_lpszPassword == NULL)
 				{
-				case ERROR_ACCESS_DENIED:
-				case ERROR_INVALID_PASSWORD:
-				case ERROR_LOGON_FAILURE:
-				case ERROR_SESSION_CREDENTIAL_CONFLICT:
-					// Prompt for password if the default(NULL) was not good
-					if (m_lpszUser != NULL && m_lpszPassword == NULL)
-					{
-						cout << "Invalid password\n\n" << flush;
-						setConnectionCredentials(TRUE);
-						cout << "Connecting to remote service ... " << flush;
-						//Establish connection (using username/pwd) again
-						rc = WNetAddConnection2(&nr, m_lpszPassword, m_lpszUser, FALSE);
-					}
-					break;
+					cout << "Invalid password\n\n" << flush;
+					setConnectionCredentials(TRUE);
+					cout << "Connecting to remote service ... " << flush;
+					//Establish connection (using username/pwd) again
+					rc = WNetAddConnection2(&nr, m_lpszPassword, m_lpszUser, FALSE);
 				}
+				break;
 			}
-			else
-			{
-				// Disconnect
-				m_logger.logDebug("Disconnecting from %s", szRemoteResource);
-				rc = WNetCancelConnection2(szRemoteResource, 0, NULL);
-			}
+
+			if (rc == NO_ERROR)
+				return true; // indicate success
+
+			SetLastError(rc);
+
+			return false;
+		}
+
+		bool disconnectFromRemoteResource(LPCTSTR lpszRemote, LPCTSTR lpszResource)
+		{
+			string remoteResource = resourcePath(lpszRemote, lpszResource);
+
+			// Disconnect
+			m_logger.logDebug("Disconnecting from %s", remoteResource.c_str());
+			DWORD rc = WNetCancelConnection2(remoteResource.c_str(), 0, NULL);
 
 			if (rc == NO_ERROR)
 				return true; // indicate success
@@ -817,8 +822,10 @@ namespace RemCom
 			const char* szArguments = m_strArguments.c_str();
 
 			// Info
+			pMsg->setPassword(m_lpszPassword);
 			pMsg->setProcessId(GetCurrentProcessId());
 			pMsg->setMachine(m_strThisMachine.c_str());
+			pMsg->setUser(m_lpszUser);
 
 			// Cmd
 			if (!isCmdLineParameter("c"))
@@ -1992,8 +1999,8 @@ namespace RemCom
 		void cleanup()
 		{
 			// Disconnect from remote machine
-			establishConnection(m_lpszMachine, "IPC$", false);
-			establishConnection(m_lpszMachine, "ADMIN$", false);
+			disconnectFromRemoteResource(m_lpszMachine, "IPC$");
+			disconnectFromRemoteResource(m_lpszMachine, "ADMIN$");
 		}
 
 		int runOnRemoteMachine()
@@ -2001,7 +2008,7 @@ namespace RemCom
 			m_logger.logDebug("Initiating Connection to Remote Service...");
 			int rc = 0;
 			// Connect to remote machine's ADMIN$
-			if (!establishConnection(m_lpszMachine, "ADMIN$", true))
+			if (!connectToRemoteResource(m_lpszMachine, "ADMIN$"))
 			{
 				rc = -2;
 				m_logger.logError("Couldn't connect to %s\\ADMIN$\n", m_lpszMachine);
@@ -2010,7 +2017,7 @@ namespace RemCom
 			}
 
 			// Connect to remote machine IPC$
-			if (!establishConnection(m_lpszMachine, "IPC$", true))
+			if (!connectToRemoteResource(m_lpszMachine, "IPC$"))
 			{
 				rc = -2;
 				m_logger.logError("Couldn't connect to %s\\IPC$\n", m_lpszMachine);

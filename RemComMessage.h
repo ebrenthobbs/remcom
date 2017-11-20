@@ -13,6 +13,9 @@ namespace RemCom
 		DWORD	dwProcessId;
 		TCHAR	szMachine[_MAX_PATH];
 		BOOL	bNoWait;
+		DWORD	dwLogonFlags;
+		TCHAR	szUser[_MAX_PATH];
+		TCHAR	szPassword[_MAX_PATH];
 	};
 
 	class RemComMessage
@@ -29,10 +32,19 @@ namespace RemCom
 		void setNoWait(bool noWait);
 		bool shouldWait();
 
+		DWORD getLogonFlags();
+		void setLogonFlags(DWORD logonFlags);
+
+		LPCTSTR getPassword();
+		void setPassword(LPCTSTR password);
+
 		DWORD getPriority();
 		void setPriority(DWORD priority);
 
 		void setProcessId(DWORD processId);
+
+		LPCTSTR getUser();
+		void setUser(LPCTSTR user);
 
 		LPCTSTR getWorkingDirectory();
 		void setWorkingDirectory(LPCTSTR workingDirectory);
