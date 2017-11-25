@@ -2551,20 +2551,20 @@ if __name__ == '__main__':
 # Also note that the reInstall and unInstall init parameters used
 # for the ServiceInstall class are set by the PHP.
 ###
-    debug = True
+    debug = False
     if debug is True:
         logging.getLogger().setLevel(logging.DEBUG)
-        print('Running script from STDIN')
+        print 'Running script from STDIN'
     else:
         logging.getLogger().setLevel(logging.INFO)
 
     command = 'ipconfig'
-    username = r'brent'
-    domain = r'gatewayfx'
-    password = 'Fr0stic8';
+    username = r'tom'
+    domain = r''
+    password = os.environ.get('ARX_PY_PWD');
     if password == None:
         password = ''
-    remoteName = target_ip = r'gatewayfx'
+    remoteName = target_ip = r'tom-think'
     port = 445
 ###
 # The following are hard coded and not set by the generating PHP.

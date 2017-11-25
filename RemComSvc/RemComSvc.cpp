@@ -729,7 +729,6 @@ namespace RemCom
 		void initLogger()
 		{
 			USES_CONVERSION;
-			launchDebugger();
 			LPCTSTR szRegistryKey = "Software\\Arxscan\\RemComSvc";
 			HKEY hRegKey;
 			bool logConfigured = false;
