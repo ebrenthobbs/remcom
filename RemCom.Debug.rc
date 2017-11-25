@@ -1,0 +1,3 @@
+IDR_RemComSVC           REMCOMSVC DISCARDABLE   "RemComSvc/Debug/RemComSvc.exe"
+
+IDR_ProcComs            PROCCOMS DISCARDABLE    "ProcComs\\Debug\\ProcComs.exe"

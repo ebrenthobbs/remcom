@@ -167,6 +167,7 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
+    <ResourceCompile Include="RemCom.Debug.rc" />
     <ResourceCompile Include="RemCom.rc" />
   </ItemGroup>
   <ItemGroup>
