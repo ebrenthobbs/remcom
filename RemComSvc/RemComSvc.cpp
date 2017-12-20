@@ -417,9 +417,15 @@ namespace RemCom
 		// Execute the requested client command
 		DWORD execute(RemComMessage* pMsg, DWORD* pReturnCode)
 		{
-			HANDLE hProcess = createProcessWithLogon(pMsg, pReturnCode);
+			HANDLE hProcess;
+			if (false)
+				hProcess = createProcessAnonymously(pMsg, pReturnCode);
+			else
+				hProcess = createProcessWithLogon(pMsg, pReturnCode);
+
 			if (hProcess == INVALID_HANDLE_VALUE)
 				return *pReturnCode;
+
 			*pReturnCode = 0;
 
 			// Wait for process to terminate
@@ -468,11 +474,7 @@ namespace RemCom
 			LPCWSTR wszDomain = szDomain == NULL ? NULL : T2W(szDomain);
 			LPCWSTR wszUser = T2W(szUserName);
 			LPCWSTR wszPassword = T2W(pMsg->getPassword());
-			DWORD dwLogonFlags = pMsg->getLogonFlags();
-			if (dwLogonFlags == 0)
-				dwLogonFlags = LOGON_NETCREDENTIALS_ONLY; // this is the minimum necessary
-			// make sure we're only using supported values
-			dwLogonFlags = dwLogonFlags & (LOGON_NETCREDENTIALS_ONLY | LOGON_WITH_PROFILE); 
+			DWORD dwLogonFlags = LOGON_NETCREDENTIALS_ONLY;// pMsg->getLogonFlags();
 			LPTSTR szCommandLine = createCommandLine(pMsg);
 			LPWSTR wszCommandLine = T2W(szCommandLine);
 			LPCTSTR szWorkingDir = pMsg->getWorkingDirectory();
@@ -649,6 +651,50 @@ namespace RemCom
 		{
 			_stprintf_s(buf, 16, "0x%08X", value);
 			return buf;
+		}
+
+		HANDLE createProcessAnonymously(RemComMessage* pMsg, DWORD* pReturnCode)
+		{
+			DWORD rc;
+			PROCESS_INFORMATION pi;
+			STARTUPINFO si;
+
+			::ZeroMemory(&si, sizeof(si));
+			si.cb = sizeof(si);
+
+			// Create named pipes for stdout, stdin, stderr
+			// Client will sit on these pipes
+			if (!createProcessIoPipes(pMsg, &si))
+			{
+				*pReturnCode = 2;
+				return INVALID_HANDLE_VALUE;
+			}
+
+			*pReturnCode = 0;
+			rc = 0;
+			LPTSTR szCommand = createCommandLine(pMsg);
+			LPCTSTR szWorkingDir = pMsg->getWorkingDirectory();
+			szWorkingDir = szWorkingDir[0] != _T('\0') ? szWorkingDir : NULL;
+			DWORD dwPriority = pMsg->getPriority() | CREATE_NO_WINDOW;
+			if (!CreateProcess(
+				NULL,			// lpApplicationName
+				szCommand,		// lpCommandLine
+				NULL,			// lpProcessAttributes
+				NULL,			// lpThreadAttributes
+				TRUE,			// bInheritHandles	
+				dwPriority,		// dwCreationFlags
+				NULL,			// lpEnvironment
+				szWorkingDir,	// lpCurrentDirectory
+				&si,			// lpStartupInfo
+				&pi))			// lpProcessInformation
+			{
+				delete szCommand;
+				*pReturnCode = 1;
+				return INVALID_HANDLE_VALUE;
+			}
+			delete szCommand;
+			*pReturnCode = 0;
+			return INVALID_HANDLE_VALUE;
 		}
 	};
 
