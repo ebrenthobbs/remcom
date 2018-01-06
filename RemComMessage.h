@@ -27,6 +27,7 @@ namespace RemCom
 		RemComMessage& operator<<(const char* szString);
 		const std::string& getCommand(std::string& command);
 
+		LPCTSTR getMachine();
 		void setMachine(LPCTSTR machine);
 
 		void setNoWait(bool noWait);
@@ -41,6 +42,7 @@ namespace RemCom
 		DWORD getPriority();
 		void setPriority(DWORD priority);
 
+		DWORD getProcessId();
 		void setProcessId(DWORD processId);
 
 		LPCTSTR getUser();

@@ -155,6 +155,8 @@ namespace RemCom
 			logMutex.lock();
 			::ZeroMemory(m_logBuffer, m_logBufferSize);
 			int len = vsprintf_s(m_logBuffer, m_logBufferSize, fmt, args);
+			DWORD pid = GetCurrentProcessId();
+			(*m_pLogStream) << "[" << pid << "]: ";
 			(*m_pLogStream) << code(logLevel) << ": ";
 			(*m_pLogStream) << m_logBuffer;
 			if (m_logBuffer[len - 1] != '\n')

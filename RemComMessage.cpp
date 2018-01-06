@@ -48,6 +48,11 @@ namespace RemCom
 		m_payload.dwLogonFlags = logonFlags;
 	}
 
+	LPCTSTR RemComMessage::getMachine()
+	{
+		return m_payload.szMachine;
+	}
+
 	void RemComMessage::setMachine(LPCTSTR machine)
 	{
 		strncpy_s(m_payload.szMachine, sizeof(m_payload.szMachine) / sizeof(TCHAR) - 1, machine, strlen(machine));
@@ -86,6 +91,11 @@ namespace RemCom
 	void RemComMessage::setPriority(DWORD priority)
 	{
 		m_payload.dwPriority = priority;
+	}
+
+	DWORD RemComMessage::getProcessId()
+	{
+		return m_payload.dwProcessId;
 	}
 
 	void RemComMessage::setProcessId(DWORD processId)

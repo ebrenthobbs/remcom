@@ -2048,7 +2048,7 @@ class RemComMessage:
         return self.__payload['LogonFlags']
 
     def setLogonFlags(self, logonFlags):
-        self.__packet['LogonFlags'] = LogonFlags
+        self.__payload['LogonFlags'] = logonFlags
 
     def getMachine(self):
         return self.__payload['Machine']
@@ -2284,7 +2284,10 @@ class PSEXEC:
             machine = ''.join([random.choice(string.letters) for _ in range(4)])
             logging.debug("Setting machine to %s" % (str(machine)))
             message.setMachine(machine)
-            message.setUser(self.__username)
+            if self.__domain is not None:
+                message.setUser("%s\%s" % (self.__domain, self.__username))
+            else:
+                message.setUser(self.__username)
             message.setPassword(self.__password)
             if self.__path is not None:
                 logging.debug("Setting working directory to %s" % (self.__path))
@@ -2380,7 +2383,7 @@ class Pipes(Thread):
         except:
             import traceback
             traceback.print_exc()
-            logging.error("Something wen't wrong connecting the pipes(%s), try again" % self.__class__)
+            logging.error("Something went wrong connecting the pipes(%s), try again" % self.__class__)
 
 
 class RemoteStdOutPipe(Pipes):
@@ -2392,6 +2395,7 @@ class RemoteStdOutPipe(Pipes):
         while True:
             try:
                 ans = self.server.readFile(self.tid,self.fid, 0, 1024)
+                logging.debug("Read %d byte(s) from remote process stdout\n" % len(ans))
             except:
                 pass
             else:

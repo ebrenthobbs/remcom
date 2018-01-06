@@ -41,10 +41,24 @@
 
 #define BUFSIZE 512
 #define LOG_BUFFER_SIZE 2048
+#define MAXUSERNAME 104
+#define MAXDOMAINNAME 253
+#define DOMAIN_USER_DELIMITER "\\"
 
 namespace RemCom
 {
 	using namespace std;
+
+	struct DomainUserInfo {
+		TCHAR userName[MAXUSERNAME + 1];
+		TCHAR domainName[MAXDOMAINNAME + 1];
+	};
+
+	enum ProcessCreationMode {
+		Anonymous = 1,
+		WithLogon = 2,
+		WithToken = 3
+	};
 
 	class Component
 	{
@@ -55,6 +69,34 @@ namespace RemCom
 
 	protected:
 		Logger* m_pLogger;
+
+		bool openRegistry(PHKEY phRegKey)
+		{
+			LPCTSTR szRegistryKey = "Software\\Arxscan\\RemComSvc";
+			LONG rc = RegOpenKeyEx(HKEY_LOCAL_MACHINE, szRegistryKey, 0, KEY_READ, phRegKey);
+			return rc == ERROR_SUCCESS;
+		}
+
+		DWORD getDwordRegKey(HKEY hKey, const std::wstring &strValueName, LPDWORD pValue)
+		{
+			DWORD dwBufferSize = sizeof(DWORD);
+			*pValue = 0;
+			ULONG nError = RegQueryValueExW(hKey, strValueName.c_str(), 0, NULL, (LPBYTE)pValue, &dwBufferSize);
+			return nError;
+		}
+
+		LONG getStringRegKey(HKEY hKey, const std::wstring &strValueName, std::wstring &strValue, const std::wstring &strDefaultValue)
+		{
+			strValue = strDefaultValue;
+			WCHAR szBuffer[512];
+			DWORD dwBufferSize = sizeof(szBuffer);
+			ULONG nError = RegQueryValueExW(hKey, strValueName.c_str(), 0, NULL, (LPBYTE)szBuffer, &dwBufferSize);
+			if (ERROR_SUCCESS == nError)
+			{
+				strValue = szBuffer;
+			}
+			return nError;
+		}
 
 		DWORD writeLastError(const string strPrefix)
 		{
@@ -136,10 +178,12 @@ namespace RemCom
 	class ClientInstance : public Component
 	{
 	public:
-		ClientInstance(HANDLE hCommPipe, Logger* pLogger) : m_hCommPipe(hCommPipe)
+		ClientInstance(HANDLE hCommPipe, Logger* pLogger) :
+			m_hCommPipe(hCommPipe)
 		{
 			m_pLogger = pLogger;
 			m_pLogger->logDebug("ClientInstance: constructor");
+			initFromRegistry();
 		}
 
 		void start(function<void()> shutdownCallback)
@@ -152,8 +196,36 @@ namespace RemCom
 	private:
 		static DWORD s_dwSvcPipeInstanceCount;
 
+		ProcessCreationMode m_processCreationMode;
 		HANDLE	m_hCommPipe = NULL;
 		function<void()> m_shutdownCallback;
+
+		void initFromRegistry()
+		{
+			HKEY hRegKey;
+			if (openRegistry(&hRegKey))
+			{
+				DWORD dwProcessCreationMode;
+				getDwordRegKey(hRegKey, L"ProcessCreationMode", &dwProcessCreationMode);
+				switch (m_processCreationMode)
+				{
+				case 1:
+					m_processCreationMode = ProcessCreationMode::Anonymous;
+					break;
+				case 2:
+					m_processCreationMode = ProcessCreationMode::WithLogon;
+					break;
+				case 3:
+					m_processCreationMode = ProcessCreationMode::WithToken;
+					break;
+				default:
+					m_processCreationMode = ProcessCreationMode::WithToken;
+					break;
+				}
+			}
+			else
+				m_processCreationMode = ProcessCreationMode::WithToken;
+		}
 
 		// Client thread proc
 		static void CommunicationPipeThreadProc(void* pThis)
@@ -354,7 +426,7 @@ namespace RemCom
 			psi->hStdOutput = CreateNamedPipe(
 				szStdOut,
 				PIPE_ACCESS_OUTBOUND,
-				PIPE_TYPE_MESSAGE | PIPE_WAIT,
+				PIPE_TYPE_BYTE | PIPE_WAIT,
 				PIPE_UNLIMITED_INSTANCES,
 				0,
 				0,
@@ -418,10 +490,21 @@ namespace RemCom
 		DWORD execute(RemComMessage* pMsg, DWORD* pReturnCode)
 		{
 			HANDLE hProcess;
-			if (false)
+			switch (m_processCreationMode)
+			{
+			case ProcessCreationMode::Anonymous:
+				m_pLogger->logDebug("Creating process anonymously");
 				hProcess = createProcessAnonymously(pMsg, pReturnCode);
-			else
+				break;
+			case ProcessCreationMode::WithLogon:
+				m_pLogger->logDebug("Creating process with logon credentials");
 				hProcess = createProcessWithLogon(pMsg, pReturnCode);
+				break;
+			default:
+				m_pLogger->logDebug("Creating process with logon token");
+				hProcess = createProcessWithToken(pMsg, pReturnCode);
+				break;
+			}
 
 			if (hProcess == INVALID_HANDLE_VALUE)
 				return *pReturnCode;
@@ -437,6 +520,7 @@ namespace RemCom
 				GetExitCodeProcess(hProcess, pReturnCode);
 				stringstream stdMessage;
 				m_pLogger->logDebug("Exit code = %d", *pReturnCode);
+				std::this_thread::sleep_for(2s);
 			}
 			else
 			{
@@ -446,35 +530,40 @@ namespace RemCom
 			return 0;
 		}
 
-#define MAXUSERNAME 104
-#define MAXDOMAINNAME 253
-#define DOMAIN_USER_DELIMITER "\\"
-
 		LPTSTR createCommandLine(RemComMessage* pMsg)
 		{
 			string command;
 			pMsg->getCommand(command);
 			size_t bufferSize = command.length() + 40;
 			LPTSTR szCommand = new TCHAR[bufferSize];
-			sprintf_s(szCommand, bufferSize, "cmd.exe /q /c \"%s\"", command.c_str());
+			//sprintf_s(szCommand, bufferSize, "cmd.exe /q /c \"%s\"", command.c_str());
+			sprintf_s(szCommand, bufferSize, "%s", command.c_str());
 			return szCommand;
 		}
 
-		HANDLE createProcessWithLogon(RemComMessage* pMsg, DWORD* pReturnCode)
+		void extractDomainUserInfo(RemComMessage* pMsg, DomainUserInfo& domainUserInfo)
 		{
-			USES_CONVERSION;
-			DWORD dwCreationFlags = 0;
-			TCHAR szUserNameBuffer[MAXUSERNAME+MAXDOMAINNAME+2];
+			TCHAR szUserNameBuffer[MAXUSERNAME + MAXDOMAINNAME + 2];
 			LPCTSTR szUserName = pMsg->getUser();
 			strncpy_s(szUserNameBuffer, sizeof(szUserNameBuffer) / sizeof(TCHAR) - 1, szUserName, strlen(szUserName));
 			LPCTSTR szDomain;
 			TCHAR* nextToken = NULL;
 			if ((szDomain = _tcstok_s(szUserNameBuffer, DOMAIN_USER_DELIMITER, &nextToken)) != NULL)
 				szUserName = _tcstok_s(NULL, DOMAIN_USER_DELIMITER, &nextToken);
-			LPCWSTR wszDomain = szDomain == NULL ? NULL : T2W(szDomain);
-			LPCWSTR wszUser = T2W(szUserName);
+			_tcsncpy_s(domainUserInfo.domainName, szDomain, _tcslen(szDomain));
+			_tcsncpy_s(domainUserInfo.userName, szUserName, _tcslen(szUserName));
+		}
+
+		HANDLE createProcessWithLogon(RemComMessage* pMsg, DWORD* pReturnCode)
+		{
+			USES_CONVERSION;
+			DWORD dwCreationFlags = 0;
+			DomainUserInfo userInfo;
+			extractDomainUserInfo(pMsg, userInfo);
+			LPCWSTR wszDomain = userInfo.domainName == NULL ? NULL : T2W(userInfo.domainName);
+			LPCWSTR wszUser = T2W(userInfo.userName);
 			LPCWSTR wszPassword = T2W(pMsg->getPassword());
-			DWORD dwLogonFlags = LOGON_NETCREDENTIALS_ONLY;// pMsg->getLogonFlags();
+			DWORD dwLogonFlags = LOGON_WITH_PROFILE;// pMsg->getLogonFlags();
 			LPTSTR szCommandLine = createCommandLine(pMsg);
 			LPWSTR wszCommandLine = T2W(szCommandLine);
 			LPCTSTR szWorkingDir = pMsg->getWorkingDirectory();
@@ -545,6 +634,67 @@ namespace RemCom
 			}
 		}
 
+		HANDLE createProcessWithToken(RemComMessage* pMsg, DWORD* pReturnCode)
+		{
+			DomainUserInfo userInfo;
+			extractDomainUserInfo(pMsg, userInfo);
+			HANDLE hToken;
+			if (!LogonUser(userInfo.userName, userInfo.domainName, pMsg->getPassword(), LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &hToken))
+			{
+				writeLastError("Error getting logon token with supplied credentials");
+				return INVALID_HANDLE_VALUE;
+			}
+
+			TOKEN_LINKED_TOKEN tokenInfo = { 0 };
+			DWORD returnLen = 0;
+			if (!GetTokenInformation(hToken, TOKEN_INFORMATION_CLASS::TokenLinkedToken, &tokenInfo, sizeof(tokenInfo), &returnLen))
+			{
+				writeLastError("Could not get extended token information");
+				return INVALID_HANDLE_VALUE;
+			}
+			
+			LPTSTR szCommandLine = createCommandLine(pMsg);
+
+			STARTUPINFO startupInfo;
+			::ZeroMemory(&startupInfo, sizeof(startupInfo));
+			startupInfo.cb = sizeof(startupInfo);
+			if (!createProcessIoPipes(pMsg, &startupInfo))
+			{
+				*pReturnCode = 2;
+				return INVALID_HANDLE_VALUE;
+			}
+
+			PROCESS_INFORMATION processInfo;
+			DWORD dwCreationFlags = CREATE_DEFAULT_ERROR_MODE | CREATE_NO_WINDOW;
+			if (CreateProcessAsUser(tokenInfo.LinkedToken, NULL, szCommandLine, NULL, NULL, TRUE,
+				dwCreationFlags, NULL, NULL, &startupInfo, &processInfo))
+			{
+				m_pLogger->logDebug("Created process id %d", processInfo.dwProcessId);
+				*pReturnCode = 0;
+				delete szCommandLine;
+				return processInfo.hProcess;
+			}
+			else
+			{
+				writeLastError("Error creating process");
+				m_pLogger->logError("Process creation parameters:\n"
+					"  lpUsername=%s\n"
+					"  lpDomain=%s\n"
+					"  lpCommandLine=%s\n"
+					"  dwCreationFlags=%s\n"
+					"  lpStartupInfo=%s\n"
+					, display(userInfo.userName).c_str()
+					, display(userInfo.domainName).c_str()
+					, display(szCommandLine, 256).c_str()
+					, displayCreationFlags(dwCreationFlags).c_str()
+					, display(startupInfo).c_str()
+				);
+				*pReturnCode = 1;
+				delete szCommandLine;
+				return INVALID_HANDLE_VALUE;
+			}
+		}
+
 		static void appendFlag(string& str, DWORD flags, DWORD bit, LPCTSTR flagName)
 		{
 			if (flags & bit)
@@ -565,6 +715,7 @@ namespace RemCom
 			appendFlag(flagStr, flags, CREATE_DEFAULT_ERROR_MODE, "CREATE_DEFAULT_ERROR_MODE");
 			appendFlag(flagStr, flags, CREATE_NEW_CONSOLE, "CREATE_NEW_CONSOLE");
 			appendFlag(flagStr, flags, CREATE_NEW_PROCESS_GROUP, "CREATE_NEW_PROCESS_GROUP");
+			appendFlag(flagStr, flags, CREATE_NO_WINDOW, "CREATE_NO_WINDOW");
 			appendFlag(flagStr, flags, CREATE_SEPARATE_WOW_VDM, "CREATE_SEPARATE_WOW_VDM");
 			appendFlag(flagStr, flags, CREATE_SUSPENDED, "CREATE_SUSPENDED");
 			appendFlag(flagStr, flags, CREATE_UNICODE_ENVIRONMENT, "CREATE_UNICODE_ENVIRONMENT");
@@ -622,6 +773,31 @@ namespace RemCom
 			return str;
 		}
 
+		static const string display(const STARTUPINFO& startupInfo)
+		{
+			USES_CONVERSION;
+			TCHAR fmtBuf[256];
+			stringstream s;
+			s << "{";
+			s << "\n    cb: " << startupInfo.cb << ",";
+			s << "\n    cbReserved2: " << startupInfo.cbReserved2 << ",";
+			s << "\n    dwFillAttribute: " << displayHexInt(startupInfo.dwFillAttribute, fmtBuf) << ",";
+			s << "\n    dwFlags: " << displayHexInt(startupInfo.dwFlags, fmtBuf) << ",";
+			s << "\n    dwX: " << startupInfo.dwX << ",";
+			s << "\n    dwXCountChars: " << startupInfo.dwXCountChars << ",";
+			s << "\n    dwXSize: " << startupInfo.dwXSize << ",";
+			s << "\n    dwY: " << startupInfo.dwY << ",";
+			s << "\n    dwYCountChars: " << startupInfo.dwYCountChars << ",";
+			s << "\n    dwYSize: " << startupInfo.dwYSize << ",";
+			s << "\n    hStdError: " << displayHexInt((LONG)startupInfo.hStdError, fmtBuf) << ",";
+			s << "\n    hStdInput: " << displayHexInt((LONG)startupInfo.hStdInput, fmtBuf) << ",";
+			s << "\n    hStdOutput: " << displayHexInt((LONG)startupInfo.hStdOutput, fmtBuf) << ",";
+			s << "\n    lpTitle: " << display(startupInfo.lpTitle) << ",";
+			s << "\n    wShowWindow: " << startupInfo.wShowWindow << ",";
+			s << "\n  }";
+			return s.str();
+		}
+
 		static const string display(const STARTUPINFOW& startupInfo)
 		{
 			USES_CONVERSION;
@@ -676,7 +852,7 @@ namespace RemCom
 			LPCTSTR szWorkingDir = pMsg->getWorkingDirectory();
 			szWorkingDir = szWorkingDir[0] != _T('\0') ? szWorkingDir : NULL;
 			DWORD dwPriority = pMsg->getPriority() | CREATE_NO_WINDOW;
-			if (!CreateProcess(
+			if (CreateProcess(
 				NULL,			// lpApplicationName
 				szCommand,		// lpCommandLine
 				NULL,			// lpProcessAttributes
@@ -689,11 +865,11 @@ namespace RemCom
 				&pi))			// lpProcessInformation
 			{
 				delete szCommand;
-				*pReturnCode = 1;
-				return INVALID_HANDLE_VALUE;
+				*pReturnCode = 0;
+				return pi.hProcess;
 			}
 			delete szCommand;
-			*pReturnCode = 0;
+			*pReturnCode = 1;
 			return INVALID_HANDLE_VALUE;
 		}
 	};
@@ -709,7 +885,7 @@ namespace RemCom
 
 		void start()
 		{
-			initLogger();
+			initFromRegistry();
 
 			// Start CommunicationPoolThread, which handles the incoming instances
 			_beginthread(RemCom::Service::CommunicationPoolThread, 0, this);
@@ -726,28 +902,31 @@ namespace RemCom
 		vector<ClientInstance*> m_clientInstances;
 		mutex m_clientMutex;
 
-		void initLogger()
+		void initFromRegistry()
 		{
-			USES_CONVERSION;
-			LPCTSTR szRegistryKey = "Software\\Arxscan\\RemComSvc";
+			m_pLogger = NULL;
 			HKEY hRegKey;
-			bool logConfigured = false;
-			LONG rc = RegOpenKeyEx(HKEY_LOCAL_MACHINE, szRegistryKey, 0, KEY_READ, &hRegKey);
-			if (rc == ERROR_SUCCESS)
+			if (openRegistry(&hRegKey))
 			{
-				wstring strLogFilePath;
-				if (getStringRegKey(hRegKey, L"LogFilePath", strLogFilePath, L"") == ERROR_SUCCESS)
-				{
-					LogLevel minLogLevel = lookupMinLogLevel(hRegKey);
-					char* szLogFilePath = W2A(strLogFilePath.c_str());
-					m_logStream.open(szLogFilePath, ios_base::out | ios_base::in | ios_base::app);
-					m_pLogger = new Logger(&m_logStream, minLogLevel, LOG_BUFFER_SIZE);
-					logConfigured = true;
-				}
+				initLogger(hRegKey);
 			}
-			if (!logConfigured) // create a null logger
+			if (m_pLogger == NULL) // create a null logger if none was specified in the registry
 			{
 				m_pLogger = new Logger(NULL, LogLevel::Fatal, LOG_BUFFER_SIZE);
+			}
+		}
+
+		void initLogger(HKEY hRegKey)
+		{
+			USES_CONVERSION;
+
+			wstring strLogFilePath;
+			if (getStringRegKey(hRegKey, L"LogFilePath", strLogFilePath, L"") == ERROR_SUCCESS)
+			{
+				LogLevel minLogLevel = lookupMinLogLevel(hRegKey);
+				char* szLogFilePath = W2A(strLogFilePath.c_str());
+				m_logStream.open(szLogFilePath, ios_base::out | ios_base::in | ios_base::app);
+				m_pLogger = new Logger(&m_logStream, minLogLevel, LOG_BUFFER_SIZE);
 			}
 		}
 
@@ -774,20 +953,6 @@ namespace RemCom
 					minLogLevel = LogLevel::Fatal;
 			}
 			return minLogLevel;
-		}
-
-		LONG getStringRegKey(HKEY hKey, const std::wstring &strValueName, std::wstring &strValue, const std::wstring &strDefaultValue)
-		{
-			strValue = strDefaultValue;
-			WCHAR szBuffer[512];
-			DWORD dwBufferSize = sizeof(szBuffer);
-			ULONG nError;
-			nError = RegQueryValueExW(hKey, strValueName.c_str(), 0, NULL, (LPBYTE)szBuffer, &dwBufferSize);
-			if (ERROR_SUCCESS == nError)
-			{
-				strValue = szBuffer;
-			}
-			return nError;
 		}
 
 		static void CommunicationPoolThread(PVOID pThis)
