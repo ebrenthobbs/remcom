@@ -8,7 +8,7 @@
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <LocalDebuggerCommandArguments>//b-300769-w10 /user:corporate\brehobbs /pwd:S0forth! cmd.exe</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>//b-300769-w10 /user:corporate\brehobbs /pwd:EverGone! "sqlcmd -S .\SQLEXPRESS -E -Q ""select name from master.dbo.sysdatabases"""</LocalDebuggerCommandArguments>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
 </Project>
