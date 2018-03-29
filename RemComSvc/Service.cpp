@@ -33,21 +33,35 @@ VOID  WINAPI RemComStart (DWORD argc, LPTSTR *argv); // prototype for the starti
 VOID  WINAPI RemComCtrlHandler (DWORD opcode); // prototype for the control handler callback function of the service
 DWORD IsService( BOOL& );
 
-int _tmain( int, LPTSTR* )
+int RunAsService()
 {
-   SERVICE_TABLE_ENTRY DispatchTable[] = { 
-        { SERVICENAME,	RemComStart }, 
-        { NULL, NULL } }; 
+	SERVICE_TABLE_ENTRY DispatchTable[] = {
+		{ SERVICENAME,	RemComStart },
+	{ NULL, NULL } };
 
-   BOOL bService = TRUE;
-   
-   // This process should be a service :)
-   IsService( bService );
-   if ( !bService )
-      _tprintf( _T("A service Cannot be started directly.\n") );
+	BOOL bService = TRUE;
 
-   // Start service
-   return StartServiceCtrlDispatcher( DispatchTable);
+	// This process should be a service :)
+	IsService(bService);
+	if (!bService)
+		_tprintf(_T("A service Cannot be started directly.\n"));
+
+	// Start service
+	return StartServiceCtrlDispatcher(DispatchTable);
+}
+
+int _tmain(int argc, LPTSTR* argv)
+{
+	if (argc > 1)
+	{
+		if (!_tcsicmp(argv[1], "interactive"))
+		{
+			RunInteractively();
+			return 0;
+		}
+	}
+
+	return RunAsService();
 }
 
 // Deletes service

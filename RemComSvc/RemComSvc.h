@@ -29,6 +29,7 @@
 
 extern HANDLE hStopServiceEvent;
 
+void RunInteractively();
 void _ServiceMain(void*);
 void DeleteSvc();
 

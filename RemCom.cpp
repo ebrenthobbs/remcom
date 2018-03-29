@@ -68,7 +68,7 @@ namespace RemCom
 	class RemCom
 	{
 	public:
-		RemCom() : m_logger(&cerr, LogLevel::Error, LOG_BUFFER_SIZE)
+		RemCom() : m_logger(cerr, LogLevel::Error, LOG_BUFFER_SIZE)
 		{
 		}
 
@@ -513,17 +513,19 @@ namespace RemCom
 		// Establish Connection to Remote Machine
 		bool connectToRemoteResource(LPCTSTR lpszRemote, LPCTSTR lpszResource)
 		{
-			string remoteResource = resourcePath(lpszRemote, lpszResource);
+			CHAR lpRemoteName[MAX_PATH];
+			sprintf_s(lpRemoteName, MAX_PATH, "%s\\%s", lpszRemote, lpszResource);
 
 			NETRESOURCE nr;
+			ZeroMemory(&nr, sizeof(nr));
 			nr.dwType = RESOURCETYPE_ANY;
 			nr.lpLocalName = NULL;
-			nr.lpRemoteName = const_cast<LPTSTR>(remoteResource.c_str());
+			nr.lpRemoteName = lpRemoteName;
 			nr.lpProvider = NULL;
 
-			//Establish connection (using username/pwd)
-			m_logger.logInfo("Establishing connection to %s", remoteResource.c_str());
-			DWORD rc = WNetAddConnection2(&nr, m_lpszPassword, m_lpszUser, FALSE);
+			// Establish connection (using username/pwd)
+			m_logger.logInfo("Establishing connection to %s", lpRemoteName);
+			DWORD rc = WNetAddConnection2(&nr, m_lpszPassword, m_lpszUser, CONNECT_TEMPORARY);
 
 			switch (rc)
 			{
@@ -537,8 +539,8 @@ namespace RemCom
 					cout << "Invalid password\n\n" << flush;
 					setConnectionCredentials(TRUE);
 					cout << "Connecting to remote service ... " << flush;
-					//Establish connection (using username/pwd) again
-					rc = WNetAddConnection2(&nr, m_lpszPassword, m_lpszUser, FALSE);
+					// Establish connection (using username/pwd) again
+					rc = WNetAddConnection2(&nr, m_lpszPassword, m_lpszUser, CONNECT_TEMPORARY);
 				}
 				break;
 			}

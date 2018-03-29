@@ -18,10 +18,22 @@ namespace RemCom
 		Fatal
 	};
 
+	typedef ostream *pOstream;
+
 	class Logger
 	{
 	public:
-		Logger(ostream* pLogStream, LogLevel minLogLevel, size_t bufferSize) : m_pLogStream(pLogStream), m_minLogLevel(minLogLevel), m_logBufferSize(bufferSize)
+		Logger(ostream& logStream, LogLevel minLogLevel, size_t bufferSize)
+			: m_minLogLevel(minLogLevel), m_logBufferSize(bufferSize)
+		{
+			m_pLogStreams = new pOstream[1];
+			m_pLogStreams[0] = &logStream;
+			m_numLogStreams = 1;
+			m_logBuffer = new char[m_logBufferSize];
+		}
+
+		Logger(ostream* pLogStreams[], size_t numLogStreams, LogLevel minLogLevel, size_t bufferSize) :
+			m_pLogStreams(pLogStreams), m_numLogStreams(numLogStreams), m_minLogLevel(minLogLevel), m_logBufferSize(bufferSize)
 		{
 			m_logBuffer = new char[m_logBufferSize];
 		}
@@ -143,26 +155,41 @@ namespace RemCom
 	private:
 		size_t m_logBufferSize;
 		char* m_logBuffer;
-		ostream* m_pLogStream;
+		ostream** m_pLogStreams;
+		size_t m_numLogStreams;
 		LogLevel m_minLogLevel;
 
 		mutex logMutex;
 
 		void logImpl(LogLevel logLevel, const char* fmt, va_list args)
 		{
-			if (m_pLogStream == NULL)
+			if (m_pLogStreams == NULL)
 				return;
 			logMutex.lock();
-			::ZeroMemory(m_logBuffer, m_logBufferSize);
-			int len = vsprintf_s(m_logBuffer, m_logBufferSize, fmt, args);
-			DWORD pid = GetCurrentProcessId();
-			(*m_pLogStream) << "[" << pid << "]: ";
-			(*m_pLogStream) << code(logLevel) << ": ";
-			(*m_pLogStream) << m_logBuffer;
-			if (m_logBuffer[len - 1] != '\n')
-				(*m_pLogStream) << '\n';
-			(*m_pLogStream) << flush;
+			try
+			{
+				::ZeroMemory(m_logBuffer, m_logBufferSize);
+				int len = vsprintf_s(m_logBuffer, m_logBufferSize, fmt, args);
+				DWORD pid = GetCurrentProcessId();
+				for (size_t i = 0; i < m_numLogStreams; i++)
+				{
+					logToStream(*m_pLogStreams[i], logLevel, pid, len);
+				}
+			}
+			catch(...)
+			{
+			}
 			logMutex.unlock();
+		}
+
+		void logToStream(ostream& logStream, LogLevel logLevel, DWORD pid, int len)
+		{
+			logStream << "[" << pid << "]: ";
+			logStream << code(logLevel) << ": ";
+			logStream << m_logBuffer;
+			if (m_logBuffer[len - 1] != '\n')
+				logStream << '\n';
+			logStream << flush;
 		}
 
 		const char* code(LogLevel logLevel)

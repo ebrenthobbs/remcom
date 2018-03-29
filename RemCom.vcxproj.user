@@ -4,11 +4,11 @@
     <ShowAllFiles>false</ShowAllFiles>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <LocalDebuggerCommandArguments>\\gatewayfx /user:gatewayfx\brent /pwd:Fr0stic8 "whoami"</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>\\w2012r2 /user:.\brent /pwd:F00dbarz "whoami"</LocalDebuggerCommandArguments>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <LocalDebuggerCommandArguments>//b-300769-w10 /user:corporate\brehobbs /pwd:EverGone! "sqlcmd -S .\SQLEXPRESS -E -Q ""select name from master.dbo.sysdatabases"""</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>//192.168.244.129 /user:.\brent /pwd:Fr0stic8! "sqlcmd -S .\SQLEXPRESS -E -Q ""select name from master.dbo.sysdatabases"""</LocalDebuggerCommandArguments>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
 </Project>

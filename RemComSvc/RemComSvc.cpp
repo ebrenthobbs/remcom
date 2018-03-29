@@ -49,12 +49,14 @@ namespace RemCom
 {
 	using namespace std;
 
-	struct DomainUserInfo {
+	struct DomainUserInfo
+	{
 		TCHAR userName[MAXUSERNAME + 1];
 		TCHAR domainName[MAXDOMAINNAME + 1];
 	};
 
-	enum ProcessCreationMode {
+	enum ProcessCreationMode
+	{
 		Anonymous = 1,
 		WithLogon = 2,
 		WithToken = 3
@@ -182,13 +184,15 @@ namespace RemCom
 			m_hCommPipe(hCommPipe)
 		{
 			m_pLogger = pLogger;
-			m_pLogger->logDebug("ClientInstance: constructor");
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("ClientInstance: constructor");
 			initFromRegistry();
 		}
 
 		void start(function<void()> shutdownCallback)
 		{
-			m_pLogger->logDebug("ClientInstance: Starting client thread");
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("ClientInstance: Starting client thread");
 			m_shutdownCallback = shutdownCallback;
 			_beginthread(CommunicationPipeThreadProc, 0, (void*)this);
 		}
@@ -247,7 +251,8 @@ namespace RemCom
 			::ZeroMemory(&response, sizeof(response));
 
 			// Waiting for communication message from client
-			m_pLogger->logDebug("Waiting for client message");
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Waiting for client message");
 			if (!msg.receive(m_hCommPipe))
 			{
 				writeLastError("Could not read message from client.");
@@ -256,12 +261,14 @@ namespace RemCom
 			else
 			{
 				string command;
-				m_pLogger->logDebug(msg.getCommand(command).c_str());
+				if (m_pLogger->isEnabled(LogLevel::Debug))
+					m_pLogger->logDebug(msg.getCommand(command).c_str());
 			}
 
 			// Execute the requested command
 			response.dwErrorCode = execute(&msg, &response.dwReturnCode);
-			m_pLogger->logDebug("Returned from execute, writing %d response bytes", sizeof(response));
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Returned from execute, writing %d response bytes", sizeof(response));
 
 			// Send back the response message (client is waiting for this response)
 			if (!WriteFile(m_hCommPipe, &response, sizeof(response), &dwWritten, NULL) || dwWritten == 0)
@@ -271,11 +278,13 @@ namespace RemCom
 			}
 			else
 			{
-				m_pLogger->logDebug("Wrote response to client. dwErrorCode=%d, dwReturnCode=%d", response.dwErrorCode, response.dwReturnCode);
+				if (m_pLogger->isEnabled(LogLevel::Debug))
+					m_pLogger->logDebug("Wrote response to client. dwErrorCode=%d, dwReturnCode=%d", response.dwErrorCode, response.dwReturnCode);
 			}
 
 		cleanup:
-			m_pLogger->logDebug("Client finished");
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Client finished");
 			DisconnectNamedPipe(m_hCommPipe);
 			CloseHandle(m_hCommPipe);
 
@@ -311,7 +320,8 @@ namespace RemCom
 			const char* szStdIn = strStdIn.c_str();
 			const char* szStdErr = strStdErr.c_str();
 
-			m_pLogger->logDebug("Creating named pipes for remote caller: "
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Creating named pipes for remote caller: "
 				" stdin=%s"
 				" stdout=%s"
 				" stderr=%s", szStdIn, szStdOut, szStdErr);
@@ -387,7 +397,8 @@ namespace RemCom
 					return false;
 				}
 			}
-			m_pLogger->logDebug("Client connected to %s pipe", pipeName);
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Client connected to %s pipe", pipeName);
 			return true;
 		}
 
@@ -417,16 +428,17 @@ namespace RemCom
 			const char* szStdIn = strStdIn.c_str();
 			const char* szStdErr = strStdErr.c_str();
 
-			m_pLogger->logDebug("Creating named pipes for remote caller: "
-				" stdin=%s"
-				" stdout=%s"
-				" stderr=%s", szStdIn, szStdOut, szStdErr);
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Creating named pipes for remote caller: "
+					" stdin=%s"
+					" stdout=%s"
+					" stderr=%s", szStdIn, szStdOut, szStdErr);
 
 			// Create StdOut pipe
 			psi->hStdOutput = CreateNamedPipe(
 				szStdOut,
 				PIPE_ACCESS_OUTBOUND,
-				PIPE_TYPE_BYTE | PIPE_WAIT,
+				PIPE_TYPE_MESSAGE | PIPE_WAIT,
 				PIPE_UNLIMITED_INSTANCES,
 				0,
 				0,
@@ -489,45 +501,70 @@ namespace RemCom
 		// Execute the requested client command
 		DWORD execute(RemComMessage* pMsg, DWORD* pReturnCode)
 		{
-			HANDLE hProcess;
-			switch (m_processCreationMode)
+			try
 			{
-			case ProcessCreationMode::Anonymous:
-				m_pLogger->logDebug("Creating process anonymously");
-				hProcess = createProcessAnonymously(pMsg, pReturnCode);
-				break;
-			case ProcessCreationMode::WithLogon:
-				m_pLogger->logDebug("Creating process with logon credentials");
-				hProcess = createProcessWithLogon(pMsg, pReturnCode);
-				break;
-			default:
-				m_pLogger->logDebug("Creating process with logon token");
-				hProcess = createProcessWithToken(pMsg, pReturnCode);
-				break;
+				HANDLE hProcess;
+				switch (m_processCreationMode)
+				{
+				case ProcessCreationMode::Anonymous:
+					if (m_pLogger->isEnabled(LogLevel::Debug))
+						m_pLogger->logDebug("Creating process anonymously");
+					hProcess = createProcessAnonymously(pMsg, pReturnCode);
+					break;
+				case ProcessCreationMode::WithLogon:
+					if (m_pLogger->isEnabled(LogLevel::Debug))
+						m_pLogger->logDebug("Creating process with logon credentials");
+					hProcess = createProcessWithLogon(pMsg, pReturnCode);
+					break;
+				default:
+					if (m_pLogger->isEnabled(LogLevel::Debug))
+						m_pLogger->logDebug("Creating process with logon token");
+					hProcess = createProcessWithToken(pMsg, pReturnCode);
+					break;
+				}
+
+				if (hProcess == INVALID_HANDLE_VALUE)
+					return *pReturnCode;
+
+				*pReturnCode = 0;
+
+				// Wait for process to terminate
+				if (pMsg->shouldWait())
+				{
+					if (m_pLogger->isEnabled(LogLevel::Debug))
+						m_pLogger->logDebug("Waiting for process to terminate");
+					WaitForSingleObject(hProcess, INFINITE);
+					if (m_pLogger->isEnabled(LogLevel::Debug))
+						m_pLogger->logDebug("Process terminated");
+					GetExitCodeProcess(hProcess, pReturnCode);
+					stringstream stdMessage;
+					if (m_pLogger->isEnabled(LogLevel::Debug))
+						m_pLogger->logDebug("Exit code = %d", *pReturnCode);
+					std::this_thread::sleep_for(2s);
+				}
+				else
+				{
+					if (m_pLogger->isEnabled(LogLevel::Debug))
+						m_pLogger->logDebug("NOT waiting for process to terminate");
+				}
+
+				return 0;
 			}
-
-			if (hProcess == INVALID_HANDLE_VALUE)
-				return *pReturnCode;
-
-			*pReturnCode = 0;
-
-			// Wait for process to terminate
-			if (pMsg->shouldWait())
+			catch (const std::runtime_error& re)
 			{
-				m_pLogger->logDebug("Waiting for process to terminate");
-				WaitForSingleObject(hProcess, INFINITE);
-				m_pLogger->logDebug("Process terminated");
-				GetExitCodeProcess(hProcess, pReturnCode);
-				stringstream stdMessage;
-				m_pLogger->logDebug("Exit code = %d", *pReturnCode);
-				std::this_thread::sleep_for(2s);
+				m_pLogger->logError("Runtime error occurred trying to execute command: %s", re.what());
+				return 0xFFFFFFFF;
 			}
-			else
+			catch (const std::exception& ex)
 			{
-				m_pLogger->logDebug("NOT waiting for process to terminate");
+				m_pLogger->logError("Exception error occurred trying to execute command: %s", ex.what());
+				return 0xFFFFFFFF;
 			}
-
-			return 0;
+			catch (...)
+			{
+				m_pLogger->logError("Unknown exception occurred trying to execute command");
+				return 0xFFFFFFFF;
+			}
 		}
 
 		LPTSTR createCommandLine(RemComMessage* pMsg)
@@ -543,13 +580,23 @@ namespace RemCom
 
 		void extractDomainUserInfo(RemComMessage* pMsg, DomainUserInfo& domainUserInfo)
 		{
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Extracting domain user info from message");
 			TCHAR szUserNameBuffer[MAXUSERNAME + MAXDOMAINNAME + 2];
 			LPCTSTR szUserName = pMsg->getUser();
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Username: %s (pre-extraction)", szUserName);
 			strncpy_s(szUserNameBuffer, sizeof(szUserNameBuffer) / sizeof(TCHAR) - 1, szUserName, strlen(szUserName));
 			LPCTSTR szDomain;
 			TCHAR* nextToken = NULL;
 			if ((szDomain = _tcstok_s(szUserNameBuffer, DOMAIN_USER_DELIMITER, &nextToken)) != NULL)
+			{
+				if (m_pLogger->isEnabled(LogLevel::Debug))
+					m_pLogger->logDebug("Domain: %s", szDomain);
 				szUserName = _tcstok_s(NULL, DOMAIN_USER_DELIMITER, &nextToken);
+				if (m_pLogger->isEnabled(LogLevel::Debug))
+					m_pLogger->logDebug("Username: %s (post-extraction)", szUserName);
+			}
 			_tcsncpy_s(domainUserInfo.domainName, szDomain, _tcslen(szDomain));
 			_tcsncpy_s(domainUserInfo.userName, szUserName, _tcslen(szUserName));
 		}
@@ -639,10 +686,18 @@ namespace RemCom
 			DomainUserInfo userInfo;
 			extractDomainUserInfo(pMsg, userInfo);
 			HANDLE hToken;
+
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Calling LogonUser");
 			if (!LogonUser(userInfo.userName, userInfo.domainName, pMsg->getPassword(), LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &hToken))
 			{
 				writeLastError("Error getting logon token with supplied credentials");
 				return INVALID_HANDLE_VALUE;
+			}
+			else
+			{
+				if (m_pLogger->isEnabled(LogLevel::Debug))
+					m_pLogger->logDebug("User successfully logged on. DOMAIN=%s, USERNAME=%s", userInfo.domainName, userInfo.userName);
 			}
 
 			TOKEN_LINKED_TOKEN tokenInfo = { 0 };
@@ -652,7 +707,12 @@ namespace RemCom
 				writeLastError("Could not get extended token information");
 				return INVALID_HANDLE_VALUE;
 			}
-			
+			else
+			{
+				if (m_pLogger->isEnabled(LogLevel::Debug))
+					m_pLogger->logDebug("Successfully extended token");
+			}
+
 			LPTSTR szCommandLine = createCommandLine(pMsg);
 
 			STARTUPINFO startupInfo;
@@ -669,7 +729,8 @@ namespace RemCom
 			if (CreateProcessAsUser(tokenInfo.LinkedToken, NULL, szCommandLine, NULL, NULL, TRUE,
 				dwCreationFlags, NULL, NULL, &startupInfo, &processInfo))
 			{
-				m_pLogger->logDebug("Created process id %d", processInfo.dwProcessId);
+				if (m_pLogger->isEnabled(LogLevel::Debug))
+					m_pLogger->logDebug("Created process id %d", processInfo.dwProcessId);
 				*pReturnCode = 0;
 				delete szCommandLine;
 				return processInfo.hProcess;
@@ -879,13 +940,17 @@ namespace RemCom
 	class Service : public Component
 	{
 	public:
-		Service()
+		Service(bool interactive)
 		{
+			m_interactive = interactive;
 		}
 
 		void start()
 		{
 			initFromRegistry();
+
+			if (m_pLogger->isEnabled(LogLevel::Info))
+				m_pLogger->logInfo("Starting version 20180328.2");
 
 			// Start CommunicationPoolThread, which handles the incoming instances
 			_beginthread(RemCom::Service::CommunicationPoolThread, 0, this);
@@ -893,11 +958,13 @@ namespace RemCom
 
 		void stop()
 		{
-			m_pLogger->logDebug("Shutting down");
+			if (m_pLogger->isEnabled(LogLevel::Info))
+				m_pLogger->logInfo("Shutting down");
 			//TODO Gracefully shut down the processing thread
 		}
 
 	private:
+		bool m_interactive;
 		ofstream m_logStream;
 		vector<ClientInstance*> m_clientInstances;
 		mutex m_clientMutex;
@@ -910,9 +977,18 @@ namespace RemCom
 			{
 				initLogger(hRegKey);
 			}
-			if (m_pLogger == NULL) // create a null logger if none was specified in the registry
+			if (m_pLogger == NULL) 
 			{
-				m_pLogger = new Logger(NULL, LogLevel::Fatal, LOG_BUFFER_SIZE);
+				if (m_interactive)
+				{
+					// Log to cout when running interactively
+					m_pLogger = new Logger(cout, LogLevel::Trace, LOG_BUFFER_SIZE);
+				}
+				else
+				{
+					// Otherwise create a null logger
+					m_pLogger = new Logger(NULL, 0, LogLevel::Fatal, LOG_BUFFER_SIZE);
+				}
 			}
 		}
 
@@ -921,12 +997,22 @@ namespace RemCom
 			USES_CONVERSION;
 
 			wstring strLogFilePath;
+			LogLevel minLogLevel = LogLevel::Trace;
 			if (getStringRegKey(hRegKey, L"LogFilePath", strLogFilePath, L"") == ERROR_SUCCESS)
 			{
-				LogLevel minLogLevel = lookupMinLogLevel(hRegKey);
+				minLogLevel = lookupMinLogLevel(hRegKey);
 				char* szLogFilePath = W2A(strLogFilePath.c_str());
 				m_logStream.open(szLogFilePath, ios_base::out | ios_base::in | ios_base::app);
-				m_pLogger = new Logger(&m_logStream, minLogLevel, LOG_BUFFER_SIZE);
+				if (m_interactive)
+				{
+					pOstream *streams = new pOstream[2] { &cout, &m_logStream };
+					m_pLogger = new Logger(streams, 2, minLogLevel, LOG_BUFFER_SIZE);
+				}
+				else
+				{
+					pOstream *streams = new pOstream[1] { &m_logStream };
+					m_pLogger = new Logger(streams, 1, minLogLevel, LOG_BUFFER_SIZE);
+				}
 			}
 		}
 
@@ -964,13 +1050,15 @@ namespace RemCom
 		// Communication Thread Pool, handles the incoming RemCom.exe requests
 		void runCommunicationPoolThread()
 		{	
-			m_pLogger->logDebug("Starting communication pool thread");
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Starting communication pool thread");
 			LPTSTR szCommPipeName = "\\\\.\\pipe\\" RemComCOMM;
 			for (;;)
 			{
 				DWORD pipeMode = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT;
 				size_t numInstances = m_clientInstances.size();
-				m_pLogger->logDebug("Awaiting next client connection on pipe " "\\\\.\\pipe\\" RemComCOMM " in %s mode. # current instances: %d",
+				if (m_pLogger->isEnabled(LogLevel::Debug))
+					m_pLogger->logDebug("Awaiting next client connection on pipe " "\\\\.\\pipe\\" RemComCOMM " in %s mode. # current instances: %d",
 					(pipeMode & PIPE_TYPE_MESSAGE ? "MESSAGE" : "BYTE"), numInstances);
 				SECURITY_ATTRIBUTES SecAttrib = { 0 };
 				SECURITY_DESCRIPTOR SecDesc;
@@ -998,20 +1086,25 @@ namespace RemCom
 					// Waiting for client to connect to this pipe
 					if (ConnectNamedPipe(hCommPipe, NULL))
 					{
-						m_pLogger->logDebug("Client connected, creating client instance");
+						if (m_pLogger->isEnabled(LogLevel::Debug))
+							m_pLogger->logDebug("Client connected, creating client instance");
 						ClientInstance* client = new ClientInstance(hCommPipe, m_pLogger);
-						m_pLogger->logDebug("Adding client to instance collection");
+						if (m_pLogger->isEnabled(LogLevel::Debug))
+							m_pLogger->logDebug("Adding client to instance collection");
 						m_clientInstances.push_back(client);
-						m_pLogger->logDebug("Starting client");
+						if (m_pLogger->isEnabled(LogLevel::Debug))
+							m_pLogger->logDebug("Starting client");
 						try
 						{
 							function<void()> shutdownCallback = [&]() { removeClientInstance(client); };
 							client->start(shutdownCallback);
-							m_pLogger->logDebug("Called client->start");
+							if (m_pLogger->isEnabled(LogLevel::Debug))
+								m_pLogger->logDebug("Called client->start");
 						}
 						catch (...)
 						{
-							m_pLogger->logDebug("Unknown exception calling client.start");
+							if (m_pLogger->isEnabled(LogLevel::Debug))
+								m_pLogger->logDebug("Unknown exception calling client.start");
 							throw;
 						}
 					}
@@ -1029,7 +1122,8 @@ namespace RemCom
 
 		void removeClientInstance(const ClientInstance* client)
 		{
-			m_pLogger->logDebug("Removing completed client");
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Removing completed client");
 			m_clientMutex.lock();
 			auto it = std::find(m_clientInstances.begin(), m_clientInstances.end(), client);
 			if (it != m_clientInstances.end())
@@ -1046,7 +1140,7 @@ namespace RemCom
 void _ServiceMain(void*)
 {
 	// Create/configure service
-	RemCom::Service service;
+	RemCom::Service service(false);
 
 	// Tell service to start processing incoming requests
 	service.start();
@@ -1059,4 +1153,30 @@ void _ServiceMain(void*)
 	// Stop the service
 	CloseHandle(hStopServiceEvent);
 	service.stop();
+}
+
+
+void RunInteractively()
+{
+	try
+	{
+		RemCom::Service service(true);
+
+		service.start();
+
+		boolean stop = false;
+		while (!stop)
+		{
+			for (std::string line; std::getline(std::cin, line);)
+			{
+				std::cout << line << std::endl;
+			}
+		}
+	}
+	catch (...)
+	{
+		std::cerr << "Uncaught error occurred, press Enter to continue";
+		std::string strInput;
+		std::cin >> strInput;
+	}
 }
