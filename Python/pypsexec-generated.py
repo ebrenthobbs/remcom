@@ -2564,7 +2564,7 @@ if __name__ == '__main__':
 
     command = 'ipconfig'
     username = r'tom'
-    domain = r''
+    domain = r'<machine-or-domain-name>'
     password = os.environ.get('ARX_PY_PWD');
     if password == None:
         password = ''
