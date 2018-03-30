@@ -3,6 +3,8 @@
 #include <stdarg.h>
 #include <fstream>
 
+#define LOG_BUFFER_SIZE 32768
+
 namespace RemCom
 {
 	using namespace std;
@@ -23,19 +25,19 @@ namespace RemCom
 	class Logger
 	{
 	public:
-		Logger(ostream& logStream, LogLevel minLogLevel, size_t bufferSize)
-			: m_minLogLevel(minLogLevel), m_logBufferSize(bufferSize)
+		Logger(ostream& logStream, LogLevel minLogLevel)
+			: m_minLogLevel(minLogLevel)
 		{
 			m_pLogStreams = new pOstream[1];
 			m_pLogStreams[0] = &logStream;
 			m_numLogStreams = 1;
-			m_logBuffer = new char[m_logBufferSize];
+			m_logBuffer = new char[LOG_BUFFER_SIZE + 1];
 		}
 
-		Logger(ostream* pLogStreams[], size_t numLogStreams, LogLevel minLogLevel, size_t bufferSize) :
-			m_pLogStreams(pLogStreams), m_numLogStreams(numLogStreams), m_minLogLevel(minLogLevel), m_logBufferSize(bufferSize)
+		Logger(ostream* pLogStreams[], size_t numLogStreams, LogLevel minLogLevel) :
+			m_pLogStreams(pLogStreams), m_numLogStreams(numLogStreams), m_minLogLevel(minLogLevel)
 		{
-			m_logBuffer = new char[m_logBufferSize];
+			m_logBuffer = new char[LOG_BUFFER_SIZE + 1];
 		}
 
 		~Logger()
@@ -153,7 +155,6 @@ namespace RemCom
 		}
 
 	private:
-		size_t m_logBufferSize;
 		char* m_logBuffer;
 		ostream** m_pLogStreams;
 		size_t m_numLogStreams;
@@ -168,8 +169,8 @@ namespace RemCom
 			logMutex.lock();
 			try
 			{
-				::ZeroMemory(m_logBuffer, m_logBufferSize);
-				int len = vsprintf_s(m_logBuffer, m_logBufferSize, fmt, args);
+				::ZeroMemory(m_logBuffer, LOG_BUFFER_SIZE+1);
+				int len = vsprintf_s(m_logBuffer, LOG_BUFFER_SIZE, fmt, args);
 				DWORD pid = GetCurrentProcessId();
 				for (size_t i = 0; i < m_numLogStreams; i++)
 				{

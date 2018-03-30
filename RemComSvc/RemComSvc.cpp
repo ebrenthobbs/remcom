@@ -40,7 +40,6 @@
 #include "../Logger.h"
 
 #define BUFSIZE 512
-#define LOG_BUFFER_SIZE 2048
 #define MAXUSERNAME 104
 #define MAXDOMAINNAME 253
 #define DOMAIN_USER_DELIMITER "\\"
@@ -262,7 +261,11 @@ namespace RemCom
 			{
 				string command;
 				if (m_pLogger->isEnabled(LogLevel::Debug))
-					m_pLogger->logDebug(msg.getCommand(command).c_str());
+				{
+					const char* szCommandString = msg.getCommand(command).c_str();
+					m_pLogger->logDebug("Command string length: %d", strlen(szCommandString));
+					m_pLogger->logDebug("Command: %s", szCommandString);
+				}
 			}
 
 			// Execute the requested command
@@ -950,7 +953,7 @@ namespace RemCom
 			initFromRegistry();
 
 			if (m_pLogger->isEnabled(LogLevel::Info))
-				m_pLogger->logInfo("Starting version 20180328.2");
+				m_pLogger->logInfo("Starting version 20180329.3");
 
 			// Start CommunicationPoolThread, which handles the incoming instances
 			_beginthread(RemCom::Service::CommunicationPoolThread, 0, this);
@@ -982,12 +985,12 @@ namespace RemCom
 				if (m_interactive)
 				{
 					// Log to cout when running interactively
-					m_pLogger = new Logger(cout, LogLevel::Trace, LOG_BUFFER_SIZE);
+					m_pLogger = new Logger(cout, LogLevel::Trace);
 				}
 				else
 				{
 					// Otherwise create a null logger
-					m_pLogger = new Logger(NULL, 0, LogLevel::Fatal, LOG_BUFFER_SIZE);
+					m_pLogger = new Logger(NULL, 0, LogLevel::Fatal);
 				}
 			}
 		}
@@ -1006,12 +1009,12 @@ namespace RemCom
 				if (m_interactive)
 				{
 					pOstream *streams = new pOstream[2] { &cout, &m_logStream };
-					m_pLogger = new Logger(streams, 2, minLogLevel, LOG_BUFFER_SIZE);
+					m_pLogger = new Logger(streams, 2, minLogLevel);
 				}
 				else
 				{
 					pOstream *streams = new pOstream[1] { &m_logStream };
-					m_pLogger = new Logger(streams, 1, minLogLevel, LOG_BUFFER_SIZE);
+					m_pLogger = new Logger(streams, 1, minLogLevel);
 				}
 			}
 		}

@@ -1,8 +1,6 @@
 #include "RemComMessage.h"
 #include <stdio.h>
 
-#define LOG_BUFFER_SIZE 2048
-
 namespace RemCom
 {
 	using namespace std;
