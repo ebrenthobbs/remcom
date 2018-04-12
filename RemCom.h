@@ -64,11 +64,25 @@
 #define LOCALHOST "\\\\localhost"
 #define LOOPBACKIP "\\\\127.0.0.1"
 
+class RemComResponseStatus
+{
+public:
+	static const DWORD ACK = 0;
+	static const DWORD IO_PIPES_READY = 10;
+	static const DWORD IO_PIPES_ATTACHED = 20;
+	static const DWORD PROCESS_STARTED = 30;
+	static const DWORD PROCESS_COMPLETED = 40;
+	static const DWORD CLIENT_PROTOCOL_ERROR = 0xFFFFFFFC;
+	static const DWORD IO_PIPES_CREATION_FAILED = 0xFFFFFFFD;
+	static const DWORD PROCESS_CREATION_FAILED = 0xFFFFFFFE;
+	static const DWORD PROCESS_EXECUTION_FAILED = 0xFFFFFFFF;
+};
+
 class RemComResponse
 {
 public:
-   DWORD dwErrorCode;
-   DWORD dwReturnCode;
+   DWORD dwStatusCode;
+   DWORD dwExitCode;
 };
 
 

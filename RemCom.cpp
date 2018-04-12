@@ -59,7 +59,6 @@
 
  // Constant Definitions
 #define		SIZEOF_BUFFER   0x100
-#define		LOG_BUFFER_SIZE	4096
 
 namespace RemCom
 {
@@ -68,7 +67,7 @@ namespace RemCom
 	class RemCom
 	{
 	public:
-		RemCom() : m_logger(cerr, LogLevel::Error, LOG_BUFFER_SIZE)
+		RemCom() : m_logger(cerr, LogLevel::Error)
 		{
 		}
 
@@ -1153,18 +1152,18 @@ namespace RemCom
 			else
 				m_logger.logCritical("Failed to connect to remote process pipes");
 
-			if (response.dwErrorCode == 0)
-				m_logger.logDebug("Remote command returned %s", DisplayableCode(response.dwReturnCode));
+			if (response.dwStatusCode == RemComResponseStatus::PROCESS_COMPLETED)
+				m_logger.logDebug("Remote command exited with %s", DisplayableCode(response.dwExitCode));
 			else
-				m_logger.logError("Remote command failed to start. Returned error code is %s", DisplayableCode(response.dwErrorCode));
+				m_logger.logError("Remote command failed to start.");
 
 			return true;
 		}
 
-		static LPCTSTR DisplayableCode(DWORD dwError)
+		static LPCTSTR DisplayableCode(DWORD dwCode)
 		{
 			static TCHAR szBuf[40];
-			_stprintf_s(szBuf, "%d(0x%X)", dwError, dwError);
+			_stprintf_s(szBuf, "%d(0x%X)", dwCode, dwCode);
 			return szBuf;
 		}
 

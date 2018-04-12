@@ -269,7 +269,7 @@ namespace RemCom
 			}
 
 			// Execute the requested command
-			response.dwErrorCode = execute(&msg, &response.dwReturnCode);
+			execute(&msg, &response);
 			if (m_pLogger->isEnabled(LogLevel::Debug))
 				m_pLogger->logDebug("Returned from execute, writing %d response bytes", sizeof(response));
 
@@ -282,7 +282,7 @@ namespace RemCom
 			else
 			{
 				if (m_pLogger->isEnabled(LogLevel::Debug))
-					m_pLogger->logDebug("Wrote response to client. dwErrorCode=%d, dwReturnCode=%d", response.dwErrorCode, response.dwReturnCode);
+					m_pLogger->logDebug("Wrote response to client. dwStatusCode=%d, dwReturnCode=%d", response.dwStatusCode, response.dwExitCode);
 			}
 
 		cleanup:
@@ -484,11 +484,6 @@ namespace RemCom
 				return false;
 			}
 
-			// Waiting for client to connect to this pipe
-			ConnectNamedPipe(psi->hStdOutput, NULL);
-			ConnectNamedPipe(psi->hStdInput, NULL);
-			ConnectNamedPipe(psi->hStdError, NULL);
-
 			return true;
 		}
 
@@ -502,7 +497,7 @@ namespace RemCom
 		}
 
 		// Execute the requested client command
-		DWORD execute(RemComMessage* pMsg, DWORD* pReturnCode)
+		void execute(RemComMessage* pMsg, RemComResponse* pResponse)
 		{
 			try
 			{
@@ -512,61 +507,57 @@ namespace RemCom
 				case ProcessCreationMode::Anonymous:
 					if (m_pLogger->isEnabled(LogLevel::Debug))
 						m_pLogger->logDebug("Creating process anonymously");
-					hProcess = createProcessAnonymously(pMsg, pReturnCode);
+					hProcess = createProcessAnonymously(pMsg, &pResponse->dwExitCode);
 					break;
 				case ProcessCreationMode::WithLogon:
 					if (m_pLogger->isEnabled(LogLevel::Debug))
 						m_pLogger->logDebug("Creating process with logon credentials");
-					hProcess = createProcessWithLogon(pMsg, pReturnCode);
+					hProcess = createProcessWithLogon(pMsg, &pResponse->dwExitCode);
 					break;
 				default:
 					if (m_pLogger->isEnabled(LogLevel::Debug))
 						m_pLogger->logDebug("Creating process with logon token");
-					hProcess = createProcessWithToken(pMsg, pReturnCode);
+					hProcess = createProcessWithToken(pMsg, pResponse);
 					break;
 				}
 
 				if (hProcess == INVALID_HANDLE_VALUE)
-					return *pReturnCode;
+					return;
 
-				*pReturnCode = 0;
-
-				// Wait for process to terminate
 				if (pMsg->shouldWait())
 				{
 					if (m_pLogger->isEnabled(LogLevel::Debug))
-						m_pLogger->logDebug("Waiting for process to terminate");
+						m_pLogger->logDebug("Waiting for process to complete");
 					WaitForSingleObject(hProcess, INFINITE);
+					pResponse->dwStatusCode = RemComResponseStatus::PROCESS_COMPLETED;
 					if (m_pLogger->isEnabled(LogLevel::Debug))
-						m_pLogger->logDebug("Process terminated");
-					GetExitCodeProcess(hProcess, pReturnCode);
+						m_pLogger->logDebug("Process completed");
+					GetExitCodeProcess(hProcess, &pResponse->dwExitCode);
 					stringstream stdMessage;
 					if (m_pLogger->isEnabled(LogLevel::Debug))
-						m_pLogger->logDebug("Exit code = %d", *pReturnCode);
+						m_pLogger->logDebug("Exit code = %d", pResponse->dwExitCode);
 					std::this_thread::sleep_for(2s);
 				}
 				else
 				{
 					if (m_pLogger->isEnabled(LogLevel::Debug))
-						m_pLogger->logDebug("NOT waiting for process to terminate");
+						m_pLogger->logDebug("NOT waiting for process to complete");
 				}
-
-				return 0;
 			}
 			catch (const std::runtime_error& re)
 			{
 				m_pLogger->logError("Runtime error occurred trying to execute command: %s", re.what());
-				return 0xFFFFFFFF;
+				pResponse->dwStatusCode = RemComResponseStatus::PROCESS_EXECUTION_FAILED;
 			}
 			catch (const std::exception& ex)
 			{
 				m_pLogger->logError("Exception error occurred trying to execute command: %s", ex.what());
-				return 0xFFFFFFFF;
+				pResponse->dwStatusCode = RemComResponseStatus::PROCESS_EXECUTION_FAILED;
 			}
 			catch (...)
 			{
 				m_pLogger->logError("Unknown exception occurred trying to execute command");
-				return 0xFFFFFFFF;
+				pResponse->dwStatusCode = RemComResponseStatus::PROCESS_EXECUTION_FAILED;
 			}
 		}
 
@@ -586,22 +577,42 @@ namespace RemCom
 			if (m_pLogger->isEnabled(LogLevel::Debug))
 				m_pLogger->logDebug("Extracting domain user info from message");
 			TCHAR szUserNameBuffer[MAXUSERNAME + MAXDOMAINNAME + 2];
-			LPCTSTR szUserName = pMsg->getUser();
+			LPCTSTR szUser = pMsg->getUser();
 			if (m_pLogger->isEnabled(LogLevel::Debug))
-				m_pLogger->logDebug("Username: %s (pre-extraction)", szUserName);
-			strncpy_s(szUserNameBuffer, sizeof(szUserNameBuffer) / sizeof(TCHAR) - 1, szUserName, strlen(szUserName));
-			LPCTSTR szDomain;
+				m_pLogger->logDebug("Specified Username: %s", szUser);
+			strncpy_s(szUserNameBuffer, sizeof(szUserNameBuffer) / sizeof(TCHAR) - 1, szUser, strlen(szUser));
+			LPCTSTR szTok0, szTok1;
 			TCHAR* nextToken = NULL;
-			if ((szDomain = _tcstok_s(szUserNameBuffer, DOMAIN_USER_DELIMITER, &nextToken)) != NULL)
+			szTok0 = _tcstok_s(szUserNameBuffer, DOMAIN_USER_DELIMITER, &nextToken);
+			szTok1 = _tcstok_s(NULL, DOMAIN_USER_DELIMITER, &nextToken);
+			if (szTok0 != NULL)
 			{
-				if (m_pLogger->isEnabled(LogLevel::Debug))
-					m_pLogger->logDebug("Domain: %s", szDomain);
-				szUserName = _tcstok_s(NULL, DOMAIN_USER_DELIMITER, &nextToken);
-				if (m_pLogger->isEnabled(LogLevel::Debug))
-					m_pLogger->logDebug("Username: %s (post-extraction)", szUserName);
+				if (szTok1 != NULL) // domain\user
+				{
+					_tcsncpy_s(domainUserInfo.domainName, szTok0, _tcslen(szTok0));
+					_tcsncpy_s(domainUserInfo.userName, szTok1, _tcslen(szTok1));
+				}
+				else // user
+				{
+					*domainUserInfo.domainName = 0;
+					_tcsncpy_s(domainUserInfo.userName, szTok0, _tcslen(szTok0));
+				}
 			}
-			_tcsncpy_s(domainUserInfo.domainName, szDomain, _tcslen(szDomain));
-			_tcsncpy_s(domainUserInfo.userName, szUserName, _tcslen(szUserName));
+			else
+			{
+				if (szTok1 != NULL) // \user
+				{
+					*domainUserInfo.domainName = 0;
+					_tcsncpy_s(domainUserInfo.userName, szTok1, _tcslen(szTok1));
+				}
+				else // weird, hopefully unreachable case indicating _tcstok_s just didn't work at all
+				{
+					*domainUserInfo.domainName = 0;
+					_tcsncpy_s(domainUserInfo.userName, szUser, _tcslen(szUser));
+				}
+			}
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Extracted DomainName: \"%s\", UserName: \"%s\"", domainUserInfo.domainName, domainUserInfo.userName);
 		}
 
 		HANDLE createProcessWithLogon(RemComMessage* pMsg, DWORD* pReturnCode)
@@ -684,7 +695,7 @@ namespace RemCom
 			}
 		}
 
-		HANDLE createProcessWithToken(RemComMessage* pMsg, DWORD* pReturnCode)
+		HANDLE createProcessWithToken(RemComMessage* pMsg, RemComResponse* pResponse)
 		{
 			DomainUserInfo userInfo;
 			extractDomainUserInfo(pMsg, userInfo);
@@ -697,18 +708,12 @@ namespace RemCom
 				writeLastError("Error getting logon token with supplied credentials");
 				return INVALID_HANDLE_VALUE;
 			}
-			else
-			{
-				if (m_pLogger->isEnabled(LogLevel::Debug))
-					m_pLogger->logDebug("User successfully logged on. DOMAIN=%s, USERNAME=%s", userInfo.domainName, userInfo.userName);
-			}
 
 			TOKEN_LINKED_TOKEN tokenInfo = { 0 };
 			DWORD returnLen = 0;
 			if (!GetTokenInformation(hToken, TOKEN_INFORMATION_CLASS::TokenLinkedToken, &tokenInfo, sizeof(tokenInfo), &returnLen))
 			{
-				writeLastError("Could not get extended token information");
-				return INVALID_HANDLE_VALUE;
+				writeLastError("Could not get extended token information, proceeding with original logon token");
 			}
 			else
 			{
@@ -718,15 +723,45 @@ namespace RemCom
 
 			LPTSTR szCommandLine = createCommandLine(pMsg);
 
+			// Create the pipes that will be used for the spawned process's IO
 			STARTUPINFO startupInfo;
 			::ZeroMemory(&startupInfo, sizeof(startupInfo));
 			startupInfo.cb = sizeof(startupInfo);
 			if (!createProcessIoPipes(pMsg, &startupInfo))
 			{
-				*pReturnCode = 2;
+				pResponse->dwStatusCode = RemComResponseStatus::IO_PIPES_CREATION_FAILED;
 				return INVALID_HANDLE_VALUE;
 			}
 
+			// Tell the client it can now attach to the pipes
+			pResponse->dwStatusCode = RemComResponseStatus::IO_PIPES_READY;
+			DWORD dwWritten;
+			if (!WriteFile(m_hCommPipe, pResponse, sizeof(RemComResponse), &dwWritten, NULL) || dwWritten == 0)
+			{
+				writeLastError("Could not send IO_PIPES_READY message to client");
+				return INVALID_HANDLE_VALUE;
+			}
+
+			// Wait for client to connect to the io pipes
+			ConnectNamedPipe(startupInfo.hStdOutput, NULL);
+			ConnectNamedPipe(startupInfo.hStdInput, NULL);
+			ConnectNamedPipe(startupInfo.hStdError, NULL);
+
+			// Wait for client to tell us it has attached to the pipes
+			DWORD dwRead;
+			if (!ReadFile(m_hCommPipe, pResponse, sizeof(RemComResponse), &dwRead, NULL) || dwRead == 0)
+			{
+				writeLastError("Could not read IO_PIPES_ATTACHED message from client");
+				return INVALID_HANDLE_VALUE;
+			}
+			if (pResponse->dwStatusCode != RemComResponseStatus::IO_PIPES_ATTACHED)
+			{
+				pResponse->dwStatusCode = RemComResponseStatus::CLIENT_PROTOCOL_ERROR;
+				m_pLogger->logError("Expecting client to have sent status code %d, received %d", RemComResponseStatus::IO_PIPES_ATTACHED, pResponse->dwStatusCode);
+				return INVALID_HANDLE_VALUE;
+			}
+
+			// Spawn the process
 			PROCESS_INFORMATION processInfo;
 			DWORD dwCreationFlags = CREATE_DEFAULT_ERROR_MODE | CREATE_NO_WINDOW;
 			if (CreateProcessAsUser(tokenInfo.LinkedToken, NULL, szCommandLine, NULL, NULL, TRUE,
@@ -734,8 +769,8 @@ namespace RemCom
 			{
 				if (m_pLogger->isEnabled(LogLevel::Debug))
 					m_pLogger->logDebug("Created process id %d", processInfo.dwProcessId);
-				*pReturnCode = 0;
 				delete szCommandLine;
+				pResponse->dwStatusCode = RemComResponseStatus::PROCESS_STARTED;
 				return processInfo.hProcess;
 			}
 			else
@@ -753,8 +788,8 @@ namespace RemCom
 					, displayCreationFlags(dwCreationFlags).c_str()
 					, display(startupInfo).c_str()
 				);
-				*pReturnCode = 1;
 				delete szCommandLine;
+				pResponse->dwStatusCode = RemComResponseStatus::PROCESS_CREATION_FAILED;
 				return INVALID_HANDLE_VALUE;
 			}
 		}
@@ -953,7 +988,7 @@ namespace RemCom
 			initFromRegistry();
 
 			if (m_pLogger->isEnabled(LogLevel::Info))
-				m_pLogger->logInfo("Starting version 20180329.3");
+				m_pLogger->logInfo("Starting version 20180411.1");
 
 			// Start CommunicationPoolThread, which handles the incoming instances
 			_beginthread(RemCom::Service::CommunicationPoolThread, 0, this);

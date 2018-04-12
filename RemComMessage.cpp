@@ -201,7 +201,7 @@ namespace RemCom
 		BOOL bSuccess = readBytes(pipe, &response, sizeof(response), "ack bytes");
 		if (!bSuccess)
 			return false;
-		if (response.dwErrorCode != 0)
+		if (response.dwStatusCode != RemComResponseStatus::ACK)
 			return false;
 		return true;
 	}
@@ -209,8 +209,8 @@ namespace RemCom
 	bool RemComMessage::writeAck(const HANDLE &pipe)
 	{
 		RemComResponse response;
-		response.dwErrorCode = 0;
-		response.dwReturnCode = 0;
+		response.dwStatusCode = RemComResponseStatus::ACK;
+		response.dwExitCode = 0;
 		return writeBytes(pipe, &response, sizeof(response), "ack bytes");
 	}
 
