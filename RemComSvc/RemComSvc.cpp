@@ -536,7 +536,6 @@ namespace RemCom
 					stringstream stdMessage;
 					if (m_pLogger->isEnabled(LogLevel::Debug))
 						m_pLogger->logDebug("Exit code = %d", pResponse->dwExitCode);
-					std::this_thread::sleep_for(2s);
 				}
 				else
 				{
@@ -741,6 +740,8 @@ namespace RemCom
 				writeLastError("Could not send IO_PIPES_READY message to client");
 				return INVALID_HANDLE_VALUE;
 			}
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Sent IO_PIPES_READY message to client");
 
 			// Wait for client to connect to the io pipes
 			ConnectNamedPipe(startupInfo.hStdOutput, NULL);
@@ -760,6 +761,8 @@ namespace RemCom
 				m_pLogger->logError("Expecting client to have sent status code %d, received %d", RemComResponseStatus::IO_PIPES_ATTACHED, pResponse->dwStatusCode);
 				return INVALID_HANDLE_VALUE;
 			}
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Client sent IO_PIPES_ATTACHED message, proceeding with process creation");
 
 			// Spawn the process
 			PROCESS_INFORMATION processInfo;
@@ -988,7 +991,7 @@ namespace RemCom
 			initFromRegistry();
 
 			if (m_pLogger->isEnabled(LogLevel::Info))
-				m_pLogger->logInfo("Starting version 20180411.1");
+				m_pLogger->logInfo("Starting version 20180412.1");
 
 			// Start CommunicationPoolThread, which handles the incoming instances
 			_beginthread(RemCom::Service::CommunicationPoolThread, 0, this);

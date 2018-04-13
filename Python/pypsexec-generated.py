@@ -245,30 +245,30 @@ class ServiceInstall:
                 self.share = self.findWritableShare(shares)
                 if self.share is None:
                     return False
-                self.copy_file(self.__exeFile ,self.share,self.__binary_service_name)
-                fileCopied = True
-                svcManager = self.openSvcManager()
-                if svcManager != 0:
-                    serverName = self.connection.getServerName()
-                    if self.share.lower() == 'admin$':
-                        path = '%systemroot%'
-                    else:
-                        if serverName != '':
-                           path = '\\\\%s\\%s' % (serverName, self.share)
-                        else:
-                           path = '\\\\127.0.0.1\\' + self.share 
-                    service = self.createService(svcManager, path)
-                    serviceCreated = True
-                    if service != 0:
-                        # Start service
-                        LOG.debug('Starting service %s.....' % self.__service_name)
-                        try:
-                            scmr.hRStartServiceW(self.rpcsvc, service)
-                        except:
-                            pass
-                        scmr.hRCloseServiceHandle(self.rpcsvc, service)
-                    scmr.hRCloseServiceHandle(self.rpcsvc, svcManager)
-                    return True
+#                self.copy_file(self.__exeFile ,self.share,self.__binary_service_name)
+#                fileCopied = True
+#                svcManager = self.openSvcManager()
+#                if svcManager != 0:
+#                    serverName = self.connection.getServerName()
+#                    if self.share.lower() == 'admin$':
+#                        path = '%systemroot%'
+#                    else:
+#                        if serverName != '':
+#                           path = '\\\\%s\\%s' % (serverName, self.share)
+#                        else:
+#                           path = '\\\\127.0.0.1\\' + self.share 
+#                    service = self.createService(svcManager, path)
+#                    serviceCreated = True
+#                    if service != 0:
+#                        # Start service
+#                        LOG.debug('Starting service %s.....' % self.__service_name)
+#                        try:
+#                            scmr.hRStartServiceW(self.rpcsvc, service)
+#                        except:
+#                            pass
+#                        scmr.hRCloseServiceHandle(self.rpcsvc, service)
+#                    scmr.hRCloseServiceHandle(self.rpcsvc, svcManager)
+#                    return True
             except Exception as e:
                 LOG.critical("Error performing the installation, cleaning up: %s" %e)
                 try:
@@ -2016,8 +2016,8 @@ class RemComMessagePayload(Structure):
 
 class RemComResponse(Structure):
     structure = (
-        ('ErrorCode','<L=0'),
-        ('ReturnCode','<L=0'),
+        ('StatusCode','<L=0'),
+        ('ExitCode','<L=0'),
     )
 
 RemComSTDOUT         = "RemCom_stdout"
@@ -2108,18 +2108,28 @@ class RemComMessage:
         LOG.debug("Sending message")
         if not self.__sendHeader(pipe):
             return False;
-        if not self.__readAck(pipe):
+        if self.__readAck(pipe) != 0:
             return False;
         if not self.__sendCommandText(pipe):
             return False;
-        return self.__readAck(pipe)
+        return (True if self.__readAck(pipe) == 0 else False)
 
     def createPipeName(self, baseName):
         pipeName = '\%s%s%d' % (baseName, self.__payload['Machine'], self.__payload['ProcessID'])
-        LOG.debug("createNamedPipe(baseName='%s', Machine='%s', ProcessID='%d') -> %s"
+        LOG.debug("createPipeName(baseName='%s', Machine='%s', ProcessID='%d') -> %s"
         % (baseName, self.__payload['Machine'], self.__payload['ProcessID'], pipeName))
         return pipeName
 
+    def waitForIoPipes(self, pipe):
+        response = self.__readResponse(pipe)
+        return response
+
+    def ackIoPipesAttached(self, pipe):
+        response = RemComResponse()
+        response['StatusCode'] = 20 # RemComResponseStatus::IO_PIPES_ATTACHED
+        response['ExitCode'] = 0
+        return self.__writeResponse(pipe, response)
+        
     #
     # Private
     #
@@ -2141,19 +2151,24 @@ class RemComMessage:
         return self.__writeBytes(pipe, self.__payload, self.__payloadSize, "header bytes")
 
     def __readAck(self, pipe):
-        response = RemComResponse();
-        bytes = self.__readBytes(pipe, 8, "ack bytes")
-        response = RemComResponse(bytes)
-        if response['ErrorCode'] != 0:
-            return False
-        return True
+        response = self.__readResponse(pipe)
+        return response['StatusCode']
 
     def __writeAck(self, pipe):
         response = RemComResponse();
-        response['ErrorCode'] = 0
-        response['ReturnCode'] = 0
-        return self.__writeBytes(pipe, response, 8, "ack bytes")
-    
+        response['StatusCode'] = 0
+        response['ExitCode'] = 0
+        return self.__writeResponse(pipe, response)
+
+    def __readResponse(self, pipe):
+        response = RemComResponse();
+        bytes = self.__readBytes(pipe, 8, "response bytes")
+        response = RemComResponse(bytes)
+        return response
+
+    def __writeResponse(self, pipe, response):
+        return self.__writeBytes(pipe, response, 8, "response bytes")
+        
     def __readBytes(self, pipe, bytesToRead, suffix):
         LOG.debug("Reading %d %s" % (bytesToRead, suffix))
         bytes = self.__s.readNamedPipe(pipe.tid, pipe.fid_main, bytesToRead)
@@ -2188,6 +2203,7 @@ class PSEXEC:
     def run(self, remoteName, remoteHost):
 
         stringbinding = 'ncacn_np:%s[\pipe\svcctl]' % remoteName
+
         logging.debug('StringBinding %s'%stringbinding)
         rpctransport = transport.DCERPCTransportFactory(stringbinding)
         rpctransport.set_dport(self.__port)
@@ -2253,13 +2269,13 @@ class PSEXEC:
 
             needinstall = False
 # The first parameter here tells the check whether or not to start the service if it exists.
-            resp = installService.checkService(not installService._reInstall)
-            if resp:
-                if installService._reInstall:
-                    installService.uninstall()
-                    needinstall = True
-            else:
-                needinstall = True
+#            resp = installService.checkService(not installService._reInstall)
+#            if resp:
+#                if installService._reInstall:
+#                    installService.uninstall()
+#                    needinstall = True
+#            else:
+#                needinstall = True
             if needinstall:
                 if installService.install() is False:
                     return
@@ -2305,7 +2321,9 @@ class PSEXEC:
             global LastDataSent
             LastDataSent = ''
 
-            # Create the pipes threads
+            message.waitForIoPipes(pipe)
+            
+            # Connect to the remote process io pipes
             stdin_pipe = RemoteStdInPipe(rpctransport, message.createPipeName(RemComSTDIN),
                                          smb.FILE_WRITE_DATA | smb.FILE_APPEND_DATA, installService.getShare())
             stdin_pipe.start()
@@ -2315,21 +2333,23 @@ class PSEXEC:
             stderr_pipe = RemoteStdErrPipe(rpctransport, message.createPipeName(RemComSTDERR),
                                            smb.FILE_READ_DATA)
             stderr_pipe.start()
+
+            message.ackIoPipesAttached(pipe)
             
             # And we stay here till the end
             ans = s.readNamedPipe(tid,fid_main,8)
 
             if len(ans):
-                retCode = RemComResponse(ans)
-                logging.debug("Process %s finished with ErrorCode: %d, ReturnCode: %d" % (
-                self.__command, retCode['ErrorCode'], retCode['ReturnCode']))
+                response = RemComResponse(ans)
+                logging.debug("Process %s finished with ExitCode: %d, StatusCode: %d" % (
+                self.__command, response['ExitCode'], response['StatusCode']))
             if installService._unInstall:
                 installService.uninstall()
             if self.__copyFile is not None:
                 # We copied a file for execution, let's remove it
                 s.deleteFile(installService.getShare(), os.path.basename(self.__copyFile))
             unInstalled = True
-            sys.exit(retCode['ErrorCode'] if retCode['ErrorCode'] else retCode['ReturnCode'])
+            sys.exit(response['ExitCode'] if response['ExitCode'] else response['StatusCode'])
 
         except SystemExit:
             raise
@@ -2364,6 +2384,7 @@ class Pipes(Thread):
 
     def connectPipe(self):
         try:
+            logging.debug("Pipes.connectPipe(pipe='%s')" % self.pipe)
             lock.acquire()
             global dialect
             #self.server = SMBConnection('*SMBSERVER', self.transport.get_smb_connection().getRemoteHost(), sess_port = self.port, preferredDialect = SMB_DIALECT)
@@ -2384,13 +2405,14 @@ class Pipes(Thread):
             import traceback
             traceback.print_exc()
             logging.error("Something went wrong connecting the pipes(%s), try again" % self.__class__)
-
+            logging.error("tid: %s, pipe: %s" % (self.tid, self.pipe))
 
 class RemoteStdOutPipe(Pipes):
     def __init__(self, transport, pipe, permisssions):
         Pipes.__init__(self, transport, pipe, permisssions)
 
     def run(self):
+        logging.debug("RemoteStdOutPipe.run()")
         self.connectPipe()
         while True:
             try:
@@ -2419,6 +2441,7 @@ class RemoteStdErrPipe(Pipes):
         Pipes.__init__(self, transport, pipe, permisssions)
 
     def run(self):
+        logging.debug("RemoteStdErrPipe.run()")
         self.connectPipe()
         while True:
             try:
@@ -2468,10 +2491,12 @@ class RemoteShell(cmd.Cmd):
         self.send_data('\r\n', False)
 
     def do_shell(self, s):
+        logging.debug("RemoteShell.do_shell()")
         os.system(s)
         self.send_data('\r\n')
 
     def do_get(self, src_path):
+        logging.debug("RemoteShell.do_get(src_path='%s')" % src_path)
         try:
             if self.transferClient is None:
                 self.connect_transferClient()
@@ -2541,6 +2566,7 @@ class RemoteStdInPipe(Pipes):
         Pipes.__init__(self, transport, pipe, permisssions, share)
 
     def run(self):
+        logging.debug("RemoteStdErrPipe.run()")
         self.connectPipe()
         self.shell = RemoteShell(self.server, self.port, self.credentials, self.tid, self.fid, self.share, self.transport)
         self.shell.cmdloop()
@@ -2562,13 +2588,14 @@ if __name__ == '__main__':
     else:
         logging.getLogger().setLevel(logging.INFO)
 
-    command = 'ipconfig'
-    username = r'tom'
-    domain = r'<machine-or-domain-name>'
+    command = r'sqlcmd -Q "select * from test..appuser"'
+    domain = r''
+    username = r'username'
     password = os.environ.get('ARX_PY_PWD');
+    password = r'password'
     if password == None:
         password = ''
-    remoteName = target_ip = r'tom-think'
+    remoteName = target_ip = r'192.168.244.156'
     port = 445
 ###
 # The following are hard coded and not set by the generating PHP.
@@ -2585,8 +2612,3 @@ if __name__ == '__main__':
     executer = PSEXEC(command, path, file, c, port, username, password, domain, hashes,
                       aesKey, k, dc_ip)
     executer.run(remoteName, target_ip)
-
-
-
-
-
