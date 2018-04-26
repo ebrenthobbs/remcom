@@ -708,14 +708,14 @@ namespace RemCom
 				return INVALID_HANDLE_VALUE;
 			}
 
-			TOKEN_LINKED_TOKEN tokenInfo = { 0 };
-			DWORD returnLen = 0;
-			if (!GetTokenInformation(hToken, TOKEN_INFORMATION_CLASS::TokenLinkedToken, &tokenInfo, sizeof(tokenInfo), &returnLen))
+			HANDLE hExtendedToken;
+			if (!DuplicateTokenEx(hToken, MAXIMUM_ALLOWED, NULL, SECURITY_IMPERSONATION_LEVEL::SecurityImpersonation, TOKEN_TYPE::TokenPrimary, &hExtendedToken))
 			{
 				writeLastError("Could not get extended token information, proceeding with original logon token");
 			}
 			else
 			{
+				hToken = hExtendedToken;
 				if (m_pLogger->isEnabled(LogLevel::Debug))
 					m_pLogger->logDebug("Successfully extended token");
 			}
@@ -767,7 +767,7 @@ namespace RemCom
 			// Spawn the process
 			PROCESS_INFORMATION processInfo;
 			DWORD dwCreationFlags = CREATE_DEFAULT_ERROR_MODE | CREATE_NO_WINDOW;
-			if (CreateProcessAsUser(tokenInfo.LinkedToken, NULL, szCommandLine, NULL, NULL, TRUE,
+			if (CreateProcessAsUser(hToken, NULL, szCommandLine, NULL, NULL, TRUE,
 				dwCreationFlags, NULL, NULL, &startupInfo, &processInfo))
 			{
 				if (m_pLogger->isEnabled(LogLevel::Debug))
@@ -991,7 +991,7 @@ namespace RemCom
 			initFromRegistry();
 
 			if (m_pLogger->isEnabled(LogLevel::Info))
-				m_pLogger->logInfo("Starting version 20180412.1");
+				m_pLogger->logInfo("Starting version 20180425.1");
 
 			// Start CommunicationPoolThread, which handles the incoming instances
 			_beginthread(RemCom::Service::CommunicationPoolThread, 0, this);
