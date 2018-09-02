@@ -202,6 +202,9 @@ namespace RemCom
 		ProcessCreationMode m_processCreationMode;
 		HANDLE	m_hCommPipe = NULL;
 		function<void()> m_shutdownCallback;
+		PROCESS_INFORMATION m_processInfo;
+		STARTUPINFO m_startupInfo;
+		HANDLE m_hToken;
 
 		void initFromRegistry()
 		{
@@ -298,95 +301,6 @@ namespace RemCom
 			m_shutdownCallback();
 		}
 
-		bool createProcessIoPipes(RemComMessage* pMsg, LPSTARTUPINFOW psi)
-		{
-			SECURITY_ATTRIBUTES SecAttrib = { 0 };
-			SECURITY_DESCRIPTOR SecDesc;
-
-			InitializeSecurityDescriptor(&SecDesc, SECURITY_DESCRIPTOR_REVISION);
-			SetSecurityDescriptorDacl(&SecDesc, TRUE, NULL, FALSE);
-
-			SecAttrib.nLength = sizeof(SECURITY_ATTRIBUTES);
-			SecAttrib.lpSecurityDescriptor = &SecDesc;;
-			SecAttrib.bInheritHandle = TRUE;
-
-			psi->dwFlags |= STARTF_USESTDHANDLES;
-			psi->hStdOutput = INVALID_HANDLE_VALUE;
-			psi->hStdInput = INVALID_HANDLE_VALUE;
-			psi->hStdError = INVALID_HANDLE_VALUE;
-
-			string strStdOut, strStdIn, strStdErr;
-			pMsg->createPipeName(RemComSTDOUT, strStdOut);
-			pMsg->createPipeName(RemComSTDIN, strStdIn);
-			pMsg->createPipeName(RemComSTDERR, strStdErr);
-			const char* szStdOut = strStdOut.c_str();
-			const char* szStdIn = strStdIn.c_str();
-			const char* szStdErr = strStdErr.c_str();
-
-			if (m_pLogger->isEnabled(LogLevel::Debug))
-				m_pLogger->logDebug("Creating named pipes for remote caller: "
-				" stdin=%s"
-				" stdout=%s"
-				" stderr=%s", szStdIn, szStdOut, szStdErr);
-
-			// Create StdOut pipe
-			psi->hStdOutput = CreateNamedPipe(
-				szStdOut,
-				PIPE_ACCESS_OUTBOUND,
-				PIPE_TYPE_MESSAGE | PIPE_WAIT,
-				PIPE_UNLIMITED_INSTANCES,
-				0,
-				0,
-				(DWORD)-1,
-				&SecAttrib);
-			checkPipeCreationError(psi->hStdOutput, szStdOut);
-
-			// Create StdError pipe
-			psi->hStdError = CreateNamedPipe(
-				szStdErr,
-				PIPE_ACCESS_OUTBOUND,
-				PIPE_TYPE_MESSAGE | PIPE_WAIT,
-				PIPE_UNLIMITED_INSTANCES,
-				0,
-				0,
-				(DWORD)-1,
-				&SecAttrib);
-			checkPipeCreationError(psi->hStdError, szStdErr);
-
-			// Create StdIn pipe
-			psi->hStdInput = CreateNamedPipe(
-				szStdIn,
-				PIPE_ACCESS_INBOUND,
-				PIPE_TYPE_MESSAGE | PIPE_WAIT,
-				PIPE_UNLIMITED_INSTANCES,
-				0,
-				0,
-				(DWORD)-1,
-				&SecAttrib);
-			checkPipeCreationError(psi->hStdInput, szStdIn);
-
-			if (psi->hStdOutput == INVALID_HANDLE_VALUE ||
-				psi->hStdError == INVALID_HANDLE_VALUE ||
-				psi->hStdInput == INVALID_HANDLE_VALUE)
-			{
-				CloseHandle(psi->hStdOutput);
-				CloseHandle(psi->hStdError);
-				CloseHandle(psi->hStdInput);
-
-				return false;
-			}
-
-			// Waiting for client to connect to this pipe
-			if (!connectIoPipe(psi->hStdOutput, "stdout"))
-				return false;
-			if (!connectIoPipe(psi->hStdInput, "stdin"))
-				return false;
-			if (!connectIoPipe(psi->hStdError, "stderr"))
-				return false;
-
-			return true;
-		}
-
 		bool connectIoPipe(HANDLE hPipe, LPCTSTR pipeName)
 		{
 			if (!ConnectNamedPipe(hPipe, NULL))
@@ -406,7 +320,7 @@ namespace RemCom
 		}
 
 		// Creates named pipes for stdout, stderr, stdin
-		bool createProcessIoPipes(RemComMessage* pMsg, LPSTARTUPINFO psi)
+		bool createProcessIoPipes(RemComMessage* pMsg)
 		{
 			SECURITY_ATTRIBUTES SecAttrib = { 0 };
 			SECURITY_DESCRIPTOR SecDesc;
@@ -418,10 +332,10 @@ namespace RemCom
 			SecAttrib.lpSecurityDescriptor = &SecDesc;;
 			SecAttrib.bInheritHandle = TRUE;
 
-			psi->dwFlags |= STARTF_USESTDHANDLES;
-			psi->hStdOutput = INVALID_HANDLE_VALUE;
-			psi->hStdInput = INVALID_HANDLE_VALUE;
-			psi->hStdError = INVALID_HANDLE_VALUE;
+			m_startupInfo.dwFlags |= STARTF_USESTDHANDLES;
+			m_startupInfo.hStdOutput = INVALID_HANDLE_VALUE;
+			m_startupInfo.hStdInput = INVALID_HANDLE_VALUE;
+			m_startupInfo.hStdError = INVALID_HANDLE_VALUE;
 
 			string strStdOut, strStdIn, strStdErr;
 			pMsg->createPipeName(RemComSTDOUT, strStdOut);
@@ -432,54 +346,57 @@ namespace RemCom
 			const char* szStdErr = strStdErr.c_str();
 
 			if (m_pLogger->isEnabled(LogLevel::Debug))
-				m_pLogger->logDebug("Creating named pipes for remote caller: "
-					" stdin=%s"
-					" stdout=%s"
-					" stderr=%s", szStdIn, szStdOut, szStdErr);
+				m_pLogger->logDebug("Creating named pipes for remote caller");
 
 			// Create StdOut pipe
-			psi->hStdOutput = CreateNamedPipe(
+			m_startupInfo.hStdOutput = CreateNamedPipe(
 				szStdOut,
-				PIPE_ACCESS_OUTBOUND,
-				PIPE_TYPE_MESSAGE | PIPE_WAIT,
-				PIPE_UNLIMITED_INSTANCES,
-				0,
-				0,
-				(DWORD)-1,
+				PIPE_ACCESS_DUPLEX,
+				PIPE_WAIT,
+				1,
+				BUFSIZE,
+				BUFSIZE,
+				NMPWAIT_USE_DEFAULT_WAIT,
 				&SecAttrib);
-			checkPipeCreationError(psi->hStdOutput, szStdOut);
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("%s: 0x%08x", szStdOut, m_startupInfo.hStdOutput);
+			checkPipeCreationError(m_startupInfo.hStdOutput, szStdOut);
 
 			// Create StdError pipe
-			psi->hStdError = CreateNamedPipe(
+			m_startupInfo.hStdError = CreateNamedPipe(
 				szStdErr,
-				PIPE_ACCESS_OUTBOUND,
-				PIPE_TYPE_MESSAGE | PIPE_WAIT,
-				PIPE_UNLIMITED_INSTANCES,
-				0,
-				0,
-				(DWORD)-1,
+				PIPE_ACCESS_DUPLEX,
+				PIPE_WAIT,
+				1,
+				BUFSIZE,
+				BUFSIZE,
+				NMPWAIT_USE_DEFAULT_WAIT,
 				&SecAttrib);
-			checkPipeCreationError(psi->hStdError, szStdErr);
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("%s: 0x%08x", szStdErr, m_startupInfo.hStdError);
+			checkPipeCreationError(m_startupInfo.hStdError, szStdErr);
 
 			// Create StdIn pipe
-			psi->hStdInput = CreateNamedPipe(
+			m_startupInfo.hStdInput = CreateNamedPipe(
 				szStdIn,
-				PIPE_ACCESS_INBOUND,
-				PIPE_TYPE_MESSAGE | PIPE_WAIT,
-				PIPE_UNLIMITED_INSTANCES,
-				0,
-				0,
-				(DWORD)-1,
+				PIPE_ACCESS_DUPLEX,
+				PIPE_WAIT,
+				1,
+				BUFSIZE,
+				BUFSIZE,
+				NMPWAIT_USE_DEFAULT_WAIT,
 				&SecAttrib);
-			checkPipeCreationError(psi->hStdInput, szStdIn);
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("%s: 0x%08x", szStdIn, m_startupInfo.hStdInput);
+			checkPipeCreationError(m_startupInfo.hStdInput, szStdIn);
 
-			if (psi->hStdOutput == INVALID_HANDLE_VALUE ||
-				psi->hStdError == INVALID_HANDLE_VALUE ||
-				psi->hStdInput == INVALID_HANDLE_VALUE)
+			if (m_startupInfo.hStdOutput == INVALID_HANDLE_VALUE ||
+				m_startupInfo.hStdError == INVALID_HANDLE_VALUE ||
+				m_startupInfo.hStdInput == INVALID_HANDLE_VALUE)
 			{
-				CloseHandle(psi->hStdOutput);
-				CloseHandle(psi->hStdError);
-				CloseHandle(psi->hStdInput);
+				CloseHandle(m_startupInfo.hStdOutput);
+				CloseHandle(m_startupInfo.hStdError);
+				CloseHandle(m_startupInfo.hStdInput);
 
 				return false;
 			}
@@ -509,11 +426,6 @@ namespace RemCom
 						m_pLogger->logDebug("Creating process anonymously");
 					hProcess = createProcessAnonymously(pMsg, &pResponse->dwExitCode);
 					break;
-				case ProcessCreationMode::WithLogon:
-					if (m_pLogger->isEnabled(LogLevel::Debug))
-						m_pLogger->logDebug("Creating process with logon credentials");
-					hProcess = createProcessWithLogon(pMsg, &pResponse->dwExitCode);
-					break;
 				default:
 					if (m_pLogger->isEnabled(LogLevel::Debug))
 						m_pLogger->logDebug("Creating process with logon token");
@@ -542,6 +454,17 @@ namespace RemCom
 					if (m_pLogger->isEnabled(LogLevel::Debug))
 						m_pLogger->logDebug("NOT waiting for process to complete");
 				}
+				FlushFileBuffers(m_startupInfo.hStdError);
+				FlushFileBuffers(m_startupInfo.hStdOutput);
+				CloseHandle(m_processInfo.hProcess);
+				CloseHandle(m_processInfo.hThread);
+				DisconnectNamedPipe(m_startupInfo.hStdError);
+				DisconnectNamedPipe(m_startupInfo.hStdInput);
+				DisconnectNamedPipe(m_startupInfo.hStdOutput);
+				CloseHandle(m_startupInfo.hStdError);
+				CloseHandle(m_startupInfo.hStdInput);
+				CloseHandle(m_startupInfo.hStdOutput);
+				CloseHandle(m_hToken);
 			}
 			catch (const std::runtime_error& re)
 			{
@@ -614,108 +537,50 @@ namespace RemCom
 				m_pLogger->logDebug("Extracted DomainName: \"%s\", UserName: \"%s\"", domainUserInfo.domainName, domainUserInfo.userName);
 		}
 
-		HANDLE createProcessWithLogon(RemComMessage* pMsg, DWORD* pReturnCode)
-		{
-			USES_CONVERSION;
-			DWORD dwCreationFlags = 0;
-			DomainUserInfo userInfo;
-			extractDomainUserInfo(pMsg, userInfo);
-			LPCWSTR wszDomain = userInfo.domainName == NULL ? NULL : T2W(userInfo.domainName);
-			LPCWSTR wszUser = T2W(userInfo.userName);
-			LPCWSTR wszPassword = T2W(pMsg->getPassword());
-			DWORD dwLogonFlags = LOGON_WITH_PROFILE;// pMsg->getLogonFlags();
-			LPTSTR szCommandLine = createCommandLine(pMsg);
-			LPWSTR wszCommandLine = T2W(szCommandLine);
-			LPCTSTR szWorkingDir = pMsg->getWorkingDirectory();
-			szWorkingDir = szWorkingDir[0] != _T('\0') ? szWorkingDir : NULL;
-			LPCWSTR wszCurrentDir = szWorkingDir == NULL ? NULL : T2W(szWorkingDir);
-			STARTUPINFOW startupInfo;
-			::ZeroMemory(&startupInfo, sizeof(startupInfo));
-			startupInfo.cb = sizeof(startupInfo);
-			PROCESS_INFORMATION processInfo;
-			LPCWSTR wszApplicationName = NULL;
-			LPVOID lpEnvironment = NULL;
-
-			// Create named pipes for stdout, stdin, stderr
-			// Client will sit on these pipes
-			if (!createProcessIoPipes(pMsg, &startupInfo))
-			{
-				*pReturnCode = 2;
-				return INVALID_HANDLE_VALUE;
-			}
-
-			// Start the requested process
-			if (
-				CreateProcessWithLogonW(
-					wszUser,			// lpUsername
-					wszDomain,			// lpDomain
-					wszPassword,		// lpPassword
-					dwLogonFlags,		// dwLogonFlags
-					wszApplicationName,	// lpApplicationName
-					wszCommandLine,		// lpCommandLine
-					dwCreationFlags,	// dwCreationFlags
-					lpEnvironment,		// lpEnvironment
-					wszCurrentDir,		// lpCurrentDirectory
-					&startupInfo,		// lpStartupInfo
-					&processInfo))		// lpProcessInformation
-			{
-				*pReturnCode = 0;
-				delete szCommandLine;
-				return processInfo.hProcess;
-			}
-			else
-			{
-				writeLastError("Error creating process");
-				m_pLogger->logError("Process creation parameters:\n"
-					"  lpUsername=%s\n"
-					"  lpDomain=%s\n"
-					"  lpPassword=%s\n"
-					"  dwLogonFlags=%s\n"
-					"  lpApplicationName=%s\n"
-					"  lpCommandLine=%s\n"
-					"  dwCreationFlags=%s\n"
-					"  lpEnvironment=%s\n"
-					"  lpCurrentDirectory=%s\n"
-					"  lpStartupInfo=%s\n"
-					, display(wszUser).c_str()
-					, display(wszDomain).c_str()
-					, display(wszPassword).c_str()
-					, displayLogonFlags(dwLogonFlags).c_str()
-					, display(wszApplicationName).c_str()
-					, display(wszCommandLine, 256).c_str()
-					, displayCreationFlags(dwCreationFlags).c_str()
-					, "NULL" //lpEnvironment
-					, display(wszCurrentDir).c_str()
-					, display(startupInfo).c_str()
-				);
-				*pReturnCode = 1;
-				delete szCommandLine;
-				return INVALID_HANDLE_VALUE;
-			}
-		}
-
 		HANDLE createProcessWithToken(RemComMessage* pMsg, RemComResponse* pResponse)
 		{
 			DomainUserInfo userInfo;
 			extractDomainUserInfo(pMsg, userInfo);
-			HANDLE hToken;
 
-			if (m_pLogger->isEnabled(LogLevel::Debug))
-				m_pLogger->logDebug("Calling LogonUser");
-			if (!LogonUser(userInfo.userName, userInfo.domainName, pMsg->getPassword(), LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &hToken))
+			bool runas = false; // winexe has a runas option. not sure if we want to support it, but including it for now just for information
+			if (runas)
 			{
-				writeLastError("Error getting logon token with supplied credentials");
-				return INVALID_HANDLE_VALUE;
+				if (m_pLogger->isEnabled(LogLevel::Debug))
+					m_pLogger->logDebug("Calling LogonUser");
+				if (!LogonUser(userInfo.userName, userInfo.domainName, pMsg->getPassword(), LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &m_hToken))
+				{
+					writeLastError("Error getting logon token with supplied credentials");
+					return INVALID_HANDLE_VALUE;
+				}
+				return m_hToken;
+			}
+			else
+			{
+				if (!ImpersonateNamedPipeClient(m_hCommPipe))
+				{
+					writeLastError("ImpersonateNamedPipeClient failed");
+					return INVALID_HANDLE_VALUE;
+				}
+				if (!OpenThreadToken(GetCurrentThread(), TOKEN_ALL_ACCESS, FALSE, &m_hToken))
+				{
+					writeLastError("OpenThreadToken failed");
+					if (!RevertToSelf())
+					{
+						writeLastError("RevertToSelf failed");
+					}
+					return INVALID_HANDLE_VALUE;
+				}
 			}
 
 			HANDLE hExtendedToken;
-			if (!DuplicateTokenEx(hToken, MAXIMUM_ALLOWED, NULL, SECURITY_IMPERSONATION_LEVEL::SecurityImpersonation, TOKEN_TYPE::TokenPrimary, &hExtendedToken))
+			if (!DuplicateTokenEx(m_hToken, MAXIMUM_ALLOWED, NULL, SECURITY_IMPERSONATION_LEVEL::SecurityImpersonation, TOKEN_TYPE::TokenPrimary, &hExtendedToken))
 			{
 				writeLastError("Could not get extended token information, proceeding with original logon token");
 			}
 			else
 			{
-				hToken = hExtendedToken;
+				CloseHandle(m_hToken);
+				m_hToken = hExtendedToken;
 				if (m_pLogger->isEnabled(LogLevel::Debug))
 					m_pLogger->logDebug("Successfully extended token");
 			}
@@ -723,14 +588,14 @@ namespace RemCom
 			LPTSTR szCommandLine = createCommandLine(pMsg);
 
 			// Create the pipes that will be used for the spawned process's IO
-			STARTUPINFO startupInfo;
-			::ZeroMemory(&startupInfo, sizeof(startupInfo));
-			startupInfo.cb = sizeof(startupInfo);
-			if (!createProcessIoPipes(pMsg, &startupInfo))
+			::ZeroMemory(&m_startupInfo, sizeof(m_startupInfo));
+			m_startupInfo.cb = sizeof(m_startupInfo);
+			if (!createProcessIoPipes(pMsg))
 			{
 				pResponse->dwStatusCode = RemComResponseStatus::IO_PIPES_CREATION_FAILED;
 				return INVALID_HANDLE_VALUE;
 			}
+			m_startupInfo.dwFlags |= STARTF_USESTDHANDLES;
 
 			// Tell the client it can now attach to the pipes
 			pResponse->dwStatusCode = RemComResponseStatus::IO_PIPES_READY;
@@ -744,11 +609,28 @@ namespace RemCom
 				m_pLogger->logDebug("Sent IO_PIPES_READY message to client");
 
 			// Wait for client to connect to the io pipes
-			ConnectNamedPipe(startupInfo.hStdOutput, NULL);
-			ConnectNamedPipe(startupInfo.hStdInput, NULL);
-			ConnectNamedPipe(startupInfo.hStdError, NULL);
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Connecting stdout pipe");
+			if (!ConnectNamedPipe(m_startupInfo.hStdOutput, NULL))
+			{
+				m_pLogger->logError("Could not connnect stdout pipe");
+			}
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Connecting stdin pipe");
+			if (!ConnectNamedPipe(m_startupInfo.hStdInput, NULL))
+			{
+				m_pLogger->logError("Could not connnect stdin pipe");
+			}
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Connecting stderr pipe");
+			if (!ConnectNamedPipe(m_startupInfo.hStdError, NULL))
+			{
+				m_pLogger->logError("Could not connnect stderr pipe");
+			}
 
 			// Wait for client to tell us it has attached to the pipes
+			if (m_pLogger->isEnabled(LogLevel::Debug))
+				m_pLogger->logDebug("Waiting for IO_PIPES_ATTACHED message from client");
 			DWORD dwRead;
 			if (!ReadFile(m_hCommPipe, pResponse, sizeof(RemComResponse), &dwRead, NULL) || dwRead == 0)
 			{
@@ -765,16 +647,15 @@ namespace RemCom
 				m_pLogger->logDebug("Client sent IO_PIPES_ATTACHED message, proceeding with process creation");
 
 			// Spawn the process
-			PROCESS_INFORMATION processInfo;
 			DWORD dwCreationFlags = CREATE_DEFAULT_ERROR_MODE | CREATE_NO_WINDOW;
-			if (CreateProcessAsUser(hToken, NULL, szCommandLine, NULL, NULL, TRUE,
-				dwCreationFlags, NULL, NULL, &startupInfo, &processInfo))
+			if (CreateProcessAsUser(m_hToken, NULL, szCommandLine, NULL, NULL, TRUE,
+				dwCreationFlags, NULL, NULL, &m_startupInfo, &m_processInfo))
 			{
 				if (m_pLogger->isEnabled(LogLevel::Debug))
-					m_pLogger->logDebug("Created process id %d", processInfo.dwProcessId);
+					m_pLogger->logDebug("Created process id %d", m_processInfo.dwProcessId);
 				delete szCommandLine;
 				pResponse->dwStatusCode = RemComResponseStatus::PROCESS_STARTED;
-				return processInfo.hProcess;
+				return m_processInfo.hProcess;
 			}
 			else
 			{
@@ -789,7 +670,7 @@ namespace RemCom
 					, display(userInfo.domainName).c_str()
 					, display(szCommandLine, 256).c_str()
 					, displayCreationFlags(dwCreationFlags).c_str()
-					, display(startupInfo).c_str()
+					, display(m_startupInfo).c_str()
 				);
 				delete szCommandLine;
 				pResponse->dwStatusCode = RemComResponseStatus::PROCESS_CREATION_FAILED;
@@ -935,14 +816,12 @@ namespace RemCom
 		{
 			DWORD rc;
 			PROCESS_INFORMATION pi;
-			STARTUPINFO si;
 
-			::ZeroMemory(&si, sizeof(si));
-			si.cb = sizeof(si);
+			::ZeroMemory(&m_startupInfo, sizeof(m_startupInfo));
 
 			// Create named pipes for stdout, stdin, stderr
 			// Client will sit on these pipes
-			if (!createProcessIoPipes(pMsg, &si))
+			if (!createProcessIoPipes(pMsg))
 			{
 				*pReturnCode = 2;
 				return INVALID_HANDLE_VALUE;
@@ -963,7 +842,7 @@ namespace RemCom
 				dwPriority,		// dwCreationFlags
 				NULL,			// lpEnvironment
 				szWorkingDir,	// lpCurrentDirectory
-				&si,			// lpStartupInfo
+				&m_startupInfo, // lpStartupInfo
 				&pi))			// lpProcessInformation
 			{
 				delete szCommand;
@@ -991,7 +870,7 @@ namespace RemCom
 			initFromRegistry();
 
 			if (m_pLogger->isEnabled(LogLevel::Info))
-				m_pLogger->logInfo("Starting version 20180425.1");
+				m_pLogger->logInfo("Starting version 20180829.1");
 
 			// Start CommunicationPoolThread, which handles the incoming instances
 			_beginthread(RemCom::Service::CommunicationPoolThread, 0, this);
